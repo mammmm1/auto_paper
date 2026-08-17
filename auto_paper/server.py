@@ -12,6 +12,7 @@ from auto_paper.arxiv_client import search_arxiv
 from auto_paper.config import Settings, load_settings
 from auto_paper.database import Database
 from auto_paper.exporter import papers_to_csv, papers_to_markdown
+from auto_paper.materializer import build_material_card, build_project_query
 from auto_paper.recommender import score_paper
 from auto_paper.scheduler import DailyScheduler
 from auto_paper.summarizer import summarize_paper
@@ -36,15 +37,17 @@ class AutoPaperApp:
         errors: list[str] = []
         for topic in topics:
             try:
-                papers = search_arxiv(topic["query"], topic["max_results"])
+                query = topic["query"] or build_project_query(topic)
+                papers = search_arxiv(query, topic["max_results"])
                 for candidate in papers:
-                    summary = summarize_paper(candidate.title, candidate.abstract, topic["query"])
+                    summary = summarize_paper(candidate.title, candidate.abstract, query)
                     score, reason = score_paper(
                         candidate.title,
                         candidate.abstract,
-                        topic["query"],
+                        query,
                         candidate.published_at,
                     )
+                    material = build_material_card(candidate, topic, summary)
                     self.db.upsert_paper(
                         {
                             "topic_id": topic["id"],
@@ -52,13 +55,23 @@ class AutoPaperApp:
                             "title": candidate.title,
                             "authors": candidate.authors,
                             "abstract": candidate.abstract,
-                            "summary": summary,
-                            "recommendation_score": score,
-                            "recommendation_reason": reason,
+                            "summary": material["summary"],
+                            "recommendation_score": max(score, material["recommendation_score"]),
+                            "recommendation_reason": material["recommendation_reason"] or reason,
                             "published_at": candidate.published_at,
                             "updated_at": candidate.updated_at,
                             "pdf_url": candidate.pdf_url,
                             "entry_url": candidate.entry_url,
+                            "material_type": material["material_type"],
+                            "integration_area": material["integration_area"],
+                            "integration_subtag": material["integration_subtag"],
+                            "stitch_action": material["stitch_action"],
+                            "stitch_difficulty": material["stitch_difficulty"],
+                            "relevance_score": material["relevance_score"],
+                            "stitchability_score": material["stitchability_score"],
+                            "code_availability_score": material["code_availability_score"],
+                            "evidence_sources": material["evidence_sources"],
+                            "evidence_quote": material["evidence_quote"],
                         }
                     )
                 total += len(papers)
@@ -76,6 +89,9 @@ def create_handler(app: AutoPaperApp) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
             route = urlparse(self.path)
+            if route.path == "/api/projects":
+                self._json(app.db.list_topics())
+                return
             if route.path == "/api/topics":
                 self._json(app.db.list_topics())
                 return
@@ -95,6 +111,29 @@ def create_handler(app: AutoPaperApp) -> type[BaseHTTPRequestHandler]:
 
         def do_POST(self) -> None:
             route = urlparse(self.path)
+            if route.path == "/api/projects":
+                payload = self._read_json()
+                try:
+                    query = payload.get("query") or build_project_query(payload)
+                    project = app.db.add_topic(
+                        payload["name"],
+                        query,
+                        int(payload.get("max_results", 20)),
+                        domain=payload.get("domain", ""),
+                        task_type=payload.get("task_type", ""),
+                        idea=payload.get("idea", ""),
+                        keywords=payload.get("keywords", ""),
+                        backbone=payload.get("backbone", ""),
+                        neck=payload.get("neck", ""),
+                        head=payload.get("head", ""),
+                        dataset=payload.get("dataset", ""),
+                    )
+                    self._json(project, HTTPStatus.CREATED)
+                except (KeyError, ValueError) as exc:
+                    self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+                except Exception as exc:  # noqa: BLE001
+                    self._json({"error": str(exc)}, HTTPStatus.CONFLICT)
+                return
             if route.path == "/api/topics":
                 payload = self._read_json()
                 try:
@@ -114,6 +153,25 @@ def create_handler(app: AutoPaperApp) -> type[BaseHTTPRequestHandler]:
                 topic_id = _optional_int(query.get("topic_id", [""])[0])
                 result = app.run_topics(topic_id)
                 self._json(result)
+                return
+            self._json({"error": "Not found"}, HTTPStatus.NOT_FOUND)
+
+        def do_PUT(self) -> None:
+            route = urlparse(self.path)
+            if route.path == "/api/projects":
+                query = parse_qs(route.query)
+                topic_id = _optional_int(query.get("id", [""])[0])
+                if not topic_id:
+                    self._json({"error": "missing id"}, HTTPStatus.BAD_REQUEST)
+                    return
+                payload = self._read_json()
+                if not payload.get("query"):
+                    payload["query"] = build_project_query(payload)
+                try:
+                    project = app.db.update_topic(topic_id, payload)
+                    self._json(project)
+                except Exception as exc:  # noqa: BLE001
+                    self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
                 return
             self._json({"error": "Not found"}, HTTPStatus.NOT_FOUND)
 
@@ -225,4 +283,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

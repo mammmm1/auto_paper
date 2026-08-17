@@ -66,15 +66,114 @@ class Database:
                 );
                 """
             )
+            self._ensure_column(conn, "topics", "domain", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(conn, "topics", "task_type", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(conn, "topics", "idea", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(conn, "topics", "keywords", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(conn, "topics", "backbone", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(conn, "topics", "neck", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(conn, "topics", "head", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(conn, "topics", "dataset", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(conn, "papers", "material_type", "TEXT NOT NULL DEFAULT 'idea'")
+            self._ensure_column(conn, "papers", "integration_area", "TEXT NOT NULL DEFAULT 'Experiment'")
+            self._ensure_column(conn, "papers", "integration_subtag", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(conn, "papers", "stitch_action", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(conn, "papers", "stitch_difficulty", "TEXT NOT NULL DEFAULT '中'")
+            self._ensure_column(conn, "papers", "relevance_score", "REAL NOT NULL DEFAULT 0")
+            self._ensure_column(conn, "papers", "stitchability_score", "REAL NOT NULL DEFAULT 0")
+            self._ensure_column(conn, "papers", "code_availability_score", "REAL NOT NULL DEFAULT 0")
+            self._ensure_column(conn, "papers", "evidence_sources", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(conn, "papers", "evidence_quote", "TEXT NOT NULL DEFAULT ''")
+
+    def _ensure_column(self, conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+        columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+        if column not in columns:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
     def ensure_seed_topic(self) -> None:
         with self.connect() as conn:
             count = conn.execute("SELECT COUNT(*) FROM topics").fetchone()[0]
             if count == 0:
                 conn.execute(
-                    "INSERT INTO topics(name, query, max_results) VALUES (?, ?, ?)",
-                    ("AI Agent", 'cat:cs.AI AND (agent OR "large language model")', 10),
+                    """
+                    INSERT INTO topics(
+                        name, query, max_results, domain, task_type, idea,
+                        keywords, backbone, neck, head, dataset
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "遥感 Transformer 分层偏向",
+                        'cat:cs.CV AND ("remote sensing" OR "object detection" OR transformer OR "small object")',
+                        20,
+                        "遥感图像",
+                        "目标检测",
+                        "Transformer 浅层偏向小物体、深层偏向大物体，利用层间目标尺度偏向增强遥感目标检测。",
+                        "remote sensing, transformer, small object, multi-scale feature, layer-wise attention",
+                        "Swin Transformer",
+                        "FPN",
+                        "Detection Head",
+                        "DOTA / DIOR",
+                    ),
                 )
+            else:
+                conn.execute(
+                    """
+                    UPDATE topics
+                    SET
+                        name = ?,
+                        query = ?,
+                        max_results = ?,
+                        domain = ?,
+                        task_type = ?,
+                        idea = ?,
+                        keywords = ?,
+                        backbone = ?,
+                        neck = ?,
+                        head = ?,
+                        dataset = ?
+                    WHERE name = 'AI Agent' AND domain = '' AND idea = ''
+                    """,
+                    (
+                        "遥感 Transformer 分层偏向",
+                        'cat:cs.CV AND ("remote sensing" OR "object detection" OR transformer OR "small object")',
+                        20,
+                        "遥感图像",
+                        "目标检测",
+                        "Transformer 浅层偏向小物体、深层偏向大物体，利用层间目标尺度偏向增强遥感目标检测。",
+                        "remote sensing, transformer, small object, multi-scale feature, layer-wise attention",
+                        "Swin Transformer",
+                        "FPN",
+                        "Detection Head",
+                        "DOTA / DIOR",
+                    ),
+                )
+                profile_count = conn.execute(
+                    "SELECT COUNT(*) FROM topics WHERE idea != '' OR domain != '' OR backbone != ''"
+                ).fetchone()[0]
+                if profile_count == 0:
+                    conn.execute(
+                        """
+                        INSERT INTO topics(
+                            name, query, max_results, domain, task_type, idea,
+                            keywords, backbone, neck, head, dataset
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            "遥感 Transformer 分层偏向",
+                            'cat:cs.CV AND ("remote sensing" OR "object detection" OR transformer OR "small object")',
+                            20,
+                            "遥感图像",
+                            "目标检测",
+                            "Transformer 浅层偏向小物体、深层偏向大物体，利用层间目标尺度偏向增强遥感目标检测。",
+                            "remote sensing, transformer, small object, multi-scale feature, layer-wise attention",
+                            "Swin Transformer",
+                            "FPN",
+                            "Detection Head",
+                            "DOTA / DIOR",
+                        ),
+                    )
 
     def list_topics(self, enabled_only: bool = False) -> list[dict[str, Any]]:
         sql = "SELECT * FROM topics"
@@ -86,13 +185,59 @@ class Database:
         with self.connect() as conn:
             return [dict(row) for row in conn.execute(sql, params).fetchall()]
 
-    def add_topic(self, name: str, query: str, max_results: int = 10) -> dict[str, Any]:
+    def add_topic(self, name: str, query: str, max_results: int = 10, **fields: Any) -> dict[str, Any]:
         with self.connect() as conn:
             cursor = conn.execute(
-                "INSERT INTO topics(name, query, max_results) VALUES (?, ?, ?)",
-                (name.strip(), query.strip(), max(1, min(max_results, 50))),
+                """
+                INSERT INTO topics(
+                    name, query, max_results, domain, task_type, idea,
+                    keywords, backbone, neck, head, dataset
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    name.strip(),
+                    query.strip(),
+                    max(1, min(max_results, 50)),
+                    fields.get("domain", "").strip(),
+                    fields.get("task_type", "").strip(),
+                    fields.get("idea", "").strip(),
+                    fields.get("keywords", "").strip(),
+                    fields.get("backbone", "").strip(),
+                    fields.get("neck", "").strip(),
+                    fields.get("head", "").strip(),
+                    fields.get("dataset", "").strip(),
+                ),
             )
             row = conn.execute("SELECT * FROM topics WHERE id = ?", (cursor.lastrowid,)).fetchone()
+            return dict(row)
+
+    def update_topic(self, topic_id: int, fields: dict[str, Any]) -> dict[str, Any]:
+        allowed = {
+            "name",
+            "query",
+            "max_results",
+            "domain",
+            "task_type",
+            "idea",
+            "keywords",
+            "backbone",
+            "neck",
+            "head",
+            "dataset",
+        }
+        updates = {key: value for key, value in fields.items() if key in allowed}
+        if "max_results" in updates:
+            updates["max_results"] = max(1, min(int(updates["max_results"]), 50))
+        if not updates:
+            with self.connect() as conn:
+                row = conn.execute("SELECT * FROM topics WHERE id = ?", (topic_id,)).fetchone()
+                return dict(row)
+        assignments = ", ".join(f"{key} = ?" for key in updates)
+        params = list(updates.values()) + [topic_id]
+        with self.connect() as conn:
+            conn.execute(f"UPDATE topics SET {assignments} WHERE id = ?", params)
+            row = conn.execute("SELECT * FROM topics WHERE id = ?", (topic_id,)).fetchone()
             return dict(row)
 
     def delete_topic(self, topic_id: int) -> None:
@@ -106,12 +251,18 @@ class Database:
                 INSERT INTO papers (
                     topic_id, external_id, title, authors, abstract, summary,
                     recommendation_score, recommendation_reason, published_at,
-                    updated_at, pdf_url, entry_url
+                    updated_at, pdf_url, entry_url, material_type,
+                    integration_area, integration_subtag, stitch_action,
+                    stitch_difficulty, relevance_score, stitchability_score,
+                    code_availability_score, evidence_sources, evidence_quote
                 )
                 VALUES (
                     :topic_id, :external_id, :title, :authors, :abstract, :summary,
                     :recommendation_score, :recommendation_reason, :published_at,
-                    :updated_at, :pdf_url, :entry_url
+                    :updated_at, :pdf_url, :entry_url, :material_type,
+                    :integration_area, :integration_subtag, :stitch_action,
+                    :stitch_difficulty, :relevance_score, :stitchability_score,
+                    :code_availability_score, :evidence_sources, :evidence_quote
                 )
                 ON CONFLICT(topic_id, external_id) DO UPDATE SET
                     title = excluded.title,
@@ -123,7 +274,17 @@ class Database:
                     published_at = excluded.published_at,
                     updated_at = excluded.updated_at,
                     pdf_url = excluded.pdf_url,
-                    entry_url = excluded.entry_url
+                    entry_url = excluded.entry_url,
+                    material_type = excluded.material_type,
+                    integration_area = excluded.integration_area,
+                    integration_subtag = excluded.integration_subtag,
+                    stitch_action = excluded.stitch_action,
+                    stitch_difficulty = excluded.stitch_difficulty,
+                    relevance_score = excluded.relevance_score,
+                    stitchability_score = excluded.stitchability_score,
+                    code_availability_score = excluded.code_availability_score,
+                    evidence_sources = excluded.evidence_sources,
+                    evidence_quote = excluded.evidence_quote
                 """,
                 paper,
             )
@@ -138,7 +299,7 @@ class Database:
         if topic_id:
             sql += " WHERE topic_id = ?"
             params.append(topic_id)
-        sql += " ORDER BY recommendation_score DESC, published_at DESC LIMIT ?"
+        sql += " ORDER BY stitchability_score DESC, recommendation_score DESC, published_at DESC LIMIT ?"
         params.append(limit)
         with self.connect() as conn:
             return [dict(row) for row in conn.execute(sql, params).fetchall()]

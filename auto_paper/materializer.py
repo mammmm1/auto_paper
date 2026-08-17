@@ -1,0 +1,233 @@
+from __future__ import annotations
+
+import re
+from typing import Any
+
+
+AREAS = {
+    "Backbone": {
+        "tags": ["Layer-wise Attention", "Representation", "Transformer Block"],
+        "signals": ["backbone", "transformer", "swin", "vit", "encoder", "layer", "attention"],
+    },
+    "Neck": {
+        "tags": ["Feature Fusion", "Multi-scale Enhancement", "Pyramid"],
+        "signals": ["neck", "fpn", "pyramid", "fusion", "multi-scale", "multiscale", "feature aggregation"],
+    },
+    "Head": {
+        "tags": ["Detection Head", "Decoder", "Prediction"],
+        "signals": ["head", "detector", "decoder", "query", "proposal", "classification", "regression"],
+    },
+    "Loss": {
+        "tags": ["Small-object Reweighting", "Auxiliary Supervision", "Optimization"],
+        "signals": ["loss", "objective", "supervision", "reweight", "imbalance", "optimization"],
+    },
+    "Data": {
+        "tags": ["Dataset", "Augmentation", "Sampling"],
+        "signals": ["dataset", "augmentation", "sample", "sampling", "dota", "dior", "nwpu", "remote sensing"],
+    },
+    "Training": {
+        "tags": ["Training Strategy", "Pretraining", "Schedule"],
+        "signals": ["training", "pretrain", "fine-tune", "schedule", "distillation", "contrastive"],
+    },
+    "Experiment": {
+        "tags": ["Ablation", "Benchmark", "Evaluation"],
+        "signals": ["ablation", "benchmark", "evaluation", "experiment", "metric", "comparison"],
+    },
+}
+
+TYPE_SIGNALS = {
+    "code": ["code", "github", "repository", "implementation", "open-source"],
+    "architecture": ["architecture", "framework", "pipeline", "network"],
+    "module": ["module", "block", "attention", "fusion", "head", "loss"],
+    "experiment": ["ablation", "benchmark", "evaluation", "experiment"],
+    "dataset": ["dataset", "data", "dota", "dior", "nwpu"],
+    "idea": ["propose", "introduce", "present", "hypothesis", "approach"],
+}
+
+
+def build_material_card(candidate: Any, project: dict[str, Any], summary: str) -> dict[str, Any]:
+    text = f"{candidate.title} {candidate.abstract}".lower()
+    area, area_score = _best_area(text, project)
+    subtag = _subtag(area, text)
+    material_type = _material_type(text)
+    relevance = _relevance_score(text, project)
+    code_availability = _code_score(text)
+    stitchability = _stitchability_score(area_score, relevance, code_availability, text, project)
+    difficulty = _difficulty(area, text, project)
+    action = _stitch_action(area, subtag, material_type, project)
+    evidence_sources, evidence_quote = _evidence(candidate.title, candidate.abstract, area, project)
+
+    return {
+        "material_type": material_type,
+        "integration_area": area,
+        "integration_subtag": subtag,
+        "stitch_action": action,
+        "stitch_difficulty": difficulty,
+        "relevance_score": relevance,
+        "stitchability_score": stitchability,
+        "code_availability_score": code_availability,
+        "recommendation_score": stitchability,
+        "recommendation_reason": f"{area} > {subtag}；{action}",
+        "evidence_sources": evidence_sources,
+        "evidence_quote": evidence_quote,
+        "summary": summary,
+    }
+
+
+def build_project_query(project: dict[str, Any]) -> str:
+    parts = [
+        project.get("domain", ""),
+        project.get("task_type", ""),
+        project.get("idea", ""),
+        project.get("keywords", ""),
+        project.get("backbone", ""),
+        project.get("neck", ""),
+        project.get("head", ""),
+        project.get("dataset", ""),
+    ]
+    terms = _keywords(" ".join(parts))
+    remote_terms = {"remote", "sensing", "object", "detection", "segmentation", "transformer"}
+    selected = sorted((terms | remote_terms) - {"image", "images"})[:12]
+    if not selected:
+        return "cat:cs.CV AND transformer"
+    query = " OR ".join(f'"{term}"' if "-" in term else term for term in selected)
+    return f"cat:cs.CV AND ({query})"
+
+
+def _best_area(text: str, project: dict[str, Any]) -> tuple[str, int]:
+    scores: dict[str, int] = {}
+    project_hints = {
+        "Backbone": project.get("backbone", ""),
+        "Neck": project.get("neck", ""),
+        "Head": project.get("head", ""),
+        "Data": project.get("dataset", ""),
+    }
+    for area, config in AREAS.items():
+        score = sum(1 for signal in config["signals"] if signal in text)
+        hint = str(project_hints.get(area, "")).lower()
+        if hint and hint in text:
+            score += 3
+        scores[area] = score
+    best = max(scores, key=scores.get)
+    if scores[best] == 0:
+        return "Experiment", 0
+    return best, scores[best]
+
+
+def _subtag(area: str, text: str) -> str:
+    if area == "Backbone" and any(word in text for word in ["layer", "shallow", "deep"]):
+        return "Layer-wise Attention"
+    if area == "Neck" and any(word in text for word in ["fusion", "fpn", "pyramid", "multi-scale", "multiscale"]):
+        return "Feature Fusion"
+    if area == "Loss" and any(word in text for word in ["small object", "imbalance", "reweight"]):
+        return "Small-object Reweighting"
+    if area == "Experiment" and "ablation" in text:
+        return "Ablation"
+    return AREAS[area]["tags"][0]
+
+
+def _material_type(text: str) -> str:
+    scores = {
+        material_type: sum(1 for signal in signals if signal in text)
+        for material_type, signals in TYPE_SIGNALS.items()
+    }
+    best = max(scores, key=scores.get)
+    return best if scores[best] else "idea"
+
+
+def _relevance_score(text: str, project: dict[str, Any]) -> float:
+    project_terms = _keywords(
+        " ".join(
+            str(project.get(field, ""))
+            for field in ["domain", "task_type", "idea", "keywords", "backbone", "neck", "head", "dataset"]
+        )
+    )
+    if not project_terms:
+        return 40.0
+    hits = sum(1 for term in project_terms if term in text)
+    return round(min(35 + hits / len(project_terms) * 65, 100), 1)
+
+
+def _stitchability_score(
+    area_score: int,
+    relevance: float,
+    code_availability: float,
+    text: str,
+    project: dict[str, Any],
+) -> float:
+    component_bonus = 0
+    for field in ["backbone", "neck", "head", "dataset"]:
+        value = str(project.get(field, "")).lower()
+        if value and value in text:
+            component_bonus += 6
+    score = 25 + min(area_score * 9, 30) + relevance * 0.25 + code_availability * 0.12 + component_bonus
+    return round(min(score, 100), 1)
+
+
+def _code_score(text: str) -> float:
+    if any(signal in text for signal in ["github", "code is available", "open-source", "repository"]):
+        return 80.0
+    if any(signal in text for signal in ["implementation", "framework", "pytorch", "tensorflow"]):
+        return 55.0
+    return 25.0
+
+
+def _difficulty(area: str, text: str, project: dict[str, Any]) -> str:
+    if area in {"Loss", "Experiment", "Training"}:
+        return "低"
+    if any(str(project.get(field, "")).lower() in text for field in ["backbone", "neck", "head"] if project.get(field)):
+        return "中"
+    if area in {"Backbone", "Head"}:
+        return "高"
+    return "中"
+
+
+def _stitch_action(area: str, subtag: str, material_type: str, project: dict[str, Any]) -> str:
+    task = project.get("task_type") or "当前任务"
+    backbone = project.get("backbone") or "当前 backbone"
+    neck = project.get("neck") or "当前 neck"
+    templates = {
+        "Backbone": f"优先评估其对 {backbone} 表征层的改造价值，关注浅层/深层特征是否能服务 {task}。",
+        "Neck": f"优先尝试把 {subtag} 思路放到 {neck} 的特征融合路径中，观察多尺度目标特征是否更稳定。",
+        "Head": f"把该素材作为检测/分割头的候选改造点，先做局部替换或辅助分支实验。",
+        "Loss": "将该损失或监督信号作为附加项接入训练，先做小权重 ablation，避免破坏 baseline。",
+        "Data": "把该数据或增强策略作为补充实验入口，优先验证对小目标和尺度分布的影响。",
+        "Training": "把该训练策略作为低侵入实验，先固定模型结构，只观察收敛和指标变化。",
+        "Experiment": "把该工作转成对比实验或消融模板，用来证明你的模块改动是否真的有效。",
+    }
+    action = templates.get(area, "把该素材作为补充阅读，人工判断可缝合位置。")
+    if material_type == "code":
+        action += " 若后续找到代码仓库，优先检查依赖框架、模型接口和配置文件。"
+    return action
+
+
+def _evidence(title: str, abstract: str, area: str, project: dict[str, Any]) -> tuple[str, str]:
+    sources = ["标题", "摘要"]
+    signals = AREAS[area]["signals"] + list(_keywords(project.get("keywords", "")))
+    sentences = _split_sentences(abstract)
+    for sentence in sentences:
+        lowered = sentence.lower()
+        if any(signal in lowered for signal in signals):
+            return "、".join(sources), sentence[:240]
+    return "、".join(sources), title[:240]
+
+
+def _keywords(text: str) -> set[str]:
+    stopwords = {
+        "and",
+        "for",
+        "from",
+        "image",
+        "images",
+        "the",
+        "this",
+        "with",
+    }
+    words = re.findall(r"[A-Za-z][A-Za-z0-9\-]{2,}", text.lower())
+    return {word for word in words if word not in stopwords}
+
+
+def _split_sentences(text: str) -> list[str]:
+    normalized = " ".join(text.split())
+    return [piece.strip() for piece in re.split(r"(?<=[.!?])\s+", normalized) if piece.strip()]
+

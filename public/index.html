@@ -12,53 +12,89 @@
         <span class="brand-mark">AP</span>
         <div>
           <h1>Auto Paper</h1>
-          <p>论文搜索、摘要与推荐</p>
+          <p>可缝合科研素材工作台</p>
         </div>
       </div>
 
-      <form id="topic-form" class="topic-form">
+      <form id="project-form" class="project-form">
+        <input name="id" type="hidden" />
         <label>
-          主题名称
-          <input name="name" required placeholder="例如：AI Agent" />
+          项目名称
+          <input name="name" required placeholder="遥感 Transformer 分层偏向" />
+        </label>
+        <div class="field-grid">
+          <label>
+            研究领域
+            <input name="domain" placeholder="遥感图像" />
+          </label>
+          <label>
+            任务类型
+            <input name="task_type" placeholder="目标检测" />
+          </label>
+        </div>
+        <label>
+          当前 idea
+          <textarea name="idea" required rows="4" placeholder="Transformer 浅层偏向小物体、深层偏向大物体..."></textarea>
         </label>
         <label>
-          arXiv 搜索语句
-          <textarea name="query" required rows="4" placeholder='例如：cat:cs.AI AND "large language model"'></textarea>
+          关键词
+          <textarea name="keywords" rows="3" placeholder="remote sensing, transformer, small object, multi-scale feature"></textarea>
         </label>
+        <div class="field-grid">
+          <label>
+            Backbone
+            <input name="backbone" placeholder="Swin Transformer" />
+          </label>
+          <label>
+            Neck
+            <input name="neck" placeholder="FPN" />
+          </label>
+          <label>
+            Head
+            <input name="head" placeholder="Detection Head" />
+          </label>
+          <label>
+            Dataset
+            <input name="dataset" placeholder="DOTA / DIOR" />
+          </label>
+        </div>
         <label>
           每次数量
-          <input name="max_results" type="number" min="1" max="50" value="10" />
+          <input name="max_results" type="number" min="1" max="50" value="20" />
         </label>
-        <button type="submit">新增主题</button>
+        <button type="submit">保存项目画像</button>
       </form>
 
       <section>
         <div class="section-title">
-          <span>主题</span>
-          <button id="refresh-topics" class="ghost" type="button">刷新</button>
+          <span>项目</span>
+          <button id="refresh-projects" class="ghost" type="button">刷新</button>
         </div>
-        <div id="topics" class="topic-list"></div>
+        <div id="projects" class="project-list"></div>
       </section>
     </aside>
 
     <main class="main">
       <header class="toolbar">
         <div>
-          <p class="eyebrow">Daily Research Loop</p>
-          <h2>今日论文推荐</h2>
+          <p class="eyebrow">Material Workbench</p>
+          <h2>可缝合素材看板</h2>
         </div>
         <div class="actions">
-          <button id="run-search" type="button">运行今日搜索</button>
+          <button id="run-search" type="button">搜索可缝合素材</button>
           <a class="button secondary" href="/api/export?format=markdown">下载 Markdown</a>
           <a class="button secondary" href="/api/export?format=csv">下载 CSV</a>
         </div>
       </header>
 
-      <div id="status" class="status">准备就绪</div>
-      <section id="papers" class="paper-list"></section>
+      <div class="status-row">
+        <div id="status" class="status">准备就绪</div>
+        <section id="board-metrics" class="board-metrics"></section>
+      </div>
+      <section id="profile-summary" class="profile-summary"></section>
+      <section id="board" class="material-board"></section>
     </main>
 
     <script src="/app.js"></script>
   </body>
 </html>
-

@@ -1,14 +1,15 @@
 # auto_paper
 
-一个面向快速迭代的论文追踪项目：每天按主题搜索论文，自动生成摘要和推荐排序，并提供网页预览与 Markdown/CSV 下载。
+一个面向快速迭代的科研素材工作台：围绕当前研究项目画像搜索论文，把论文转成可缝合素材卡，辅助判断哪些 idea、模块和架构思想可以落地到自己的 pipeline。
 
 ## 第一版能力
 
-- 主题管理：配置多个论文主题和搜索关键词。
-- 每日搜索：基于 arXiv API 拉取最新论文，可手动触发，也支持服务启动后的每日后台任务。
+- 项目画像：配置研究领域、任务、idea、backbone、neck、head、dataset。
+- 每日搜索：基于 arXiv API 围绕项目画像拉取最新论文，可手动触发，也支持服务启动后的每日后台任务。
 - 自动摘要：先用轻量启发式摘要跑通闭环，后续可替换为 LLM 总结。
-- 推荐排序：结合关键词匹配、发布时间和摘要信号生成推荐分。
-- 在线预览：内置 Web 页面查看主题、论文、摘要和推荐理由。
+- 素材卡：为论文生成可接入位置、二级标签、缝合动作、接入难度和证据来源。
+- 三分排序：生成相关性、可缝合度、代码可用性三类评分，主排序使用可缝合度。
+- 在线预览：内置 Web 页面按 Backbone / Neck / Head / Loss / Data / Training / Experiment 看板查看素材。
 - 下载导出：支持 Markdown 与 CSV 下载。
 
 ## 快速启动
@@ -23,7 +24,7 @@ python -m auto_paper.server
 http://127.0.0.1:8000
 ```
 
-默认会创建一个 `AI Agent` 示例主题。你可以在页面里新增主题，点击“运行今日搜索”后查看论文。第一版摘要和推荐不依赖外部模型，但搜索需要当前网络可以访问 arXiv API。
+默认会创建一个遥感 Transformer 示例项目。你可以在页面里编辑项目画像，点击“搜索可缝合素材”后查看素材卡。第一版摘要、评分和缝合建议不依赖外部模型，但搜索需要当前网络可以访问 arXiv API。
 
 ## 命令行用法
 
@@ -46,6 +47,7 @@ auto_paper/
   arxiv_client.py    # arXiv 搜索
   database.py        # SQLite 表结构和读写
   exporter.py        # Markdown/CSV 导出
+  materializer.py    # 素材卡分类、评分与缝合动作建议
   recommender.py     # 推荐分与推荐理由
   scheduler.py       # 每日后台任务
   server.py          # HTTP API 与静态页面服务
@@ -53,6 +55,7 @@ auto_paper/
 docs/
   architecture.md    # MVP 架构设计
   iteration-loop.md  # 循环工程迭代方式
+  material-workbench-mvp.md # 可缝合素材工作台设计
 public/
   index.html
   styles.css
@@ -61,7 +64,7 @@ public/
 
 ## 下一轮迭代建议
 
-1. 接入 OpenAI/本地模型，把启发式摘要替换成结构化 LLM 总结。
-2. 增加用户反馈按钮，让“感兴趣/不感兴趣”进入推荐权重。
-3. 增加 GitHub Pages/Vercel/Render 部署配置，实现真正公网预览。
-4. 扩展数据源：Semantic Scholar、OpenReview、PubMed、Papers With Code。
+1. 接入 OpenAI/本地模型，增强素材卡的缝合动作和实验路线生成。
+2. 增加方案篮子，把 3-5 张素材卡组合成可执行实验路线。
+3. 增加轻量代码扫描，自动识别 backbone、neck、head、dataset。
+4. 扩展数据源：Semantic Scholar、Papers with Code、DBLP。
