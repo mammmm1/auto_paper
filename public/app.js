@@ -245,13 +245,17 @@ function renderMetrics() {
     0,
   );
   const codeReady = relevant.filter(
-    (material) => Number(material.code_availability_score || 0) >= 55,
+    (material) => parseEvidence(material)?.code?.status === "verified_repository",
+  ).length;
+  const evidenceReady = relevant.filter(
+    (material) => material.full_text_status === "verified",
   ).length;
   const basketSize = state.materials.filter((material) => Boolean(material.in_basket)).length;
   metricsEl.innerHTML = `
     <div><span>有效素材</span><strong>${total}</strong></div>
     <div><span>最高排序分</span><strong>${best.toFixed(1)}</strong></div>
-    <div><span>代码线索</span><strong>${codeReady}</strong></div>
+    <div><span>全文证据</span><strong>${evidenceReady}</strong></div>
+    <div><span>代码仓库</span><strong>${codeReady}</strong></div>
     <div><span>方案篮子</span><strong>${basketSize}</strong></div>
   `;
 }
@@ -283,6 +287,12 @@ function renderMaterialCard(paper) {
   const feedback = paper.user_feedback || "";
   const tier = paper.relevance_tier || "reference";
   const hasAnalysis = Boolean(paper.deep_analysis_json);
+  const evidenceStatus = paper.full_text_status || "";
+  const evidenceLabels = {
+    verified: "全文已核验",
+    text_insufficient: "文本不足",
+    failed: "核验失败",
+  };
   const tierLabels = {
     direct: "直接相关",
     transferable: "可迁移",
@@ -297,6 +307,7 @@ function renderMaterialCard(paper) {
           <span class="tier-flag tier-${escapeHtml(tier)}">${escapeHtml(tierLabels[tier] || "待判断")}</span>
           ${paper.is_read ? '<span class="read-flag">已读</span>' : ""}
           ${hasAnalysis ? '<span class="analysis-flag">已分析</span>' : ""}
+          ${evidenceStatus ? `<span class="evidence-flag evidence-${escapeHtml(evidenceStatus)}">${escapeHtml(evidenceLabels[evidenceStatus] || evidenceStatus)}</span>` : ""}
         </div>
         <strong title="反馈重排分">${rankingScore.toFixed(1)}</strong>
       </div>
@@ -328,6 +339,7 @@ function renderMaterialCard(paper) {
       </div>
       <div class="card-actions">
         <button class="compact analysis-button" data-action="analyze" type="button">${hasAnalysis ? "查看分析" : "深度分析"}</button>
+        <button class="compact evidence-button" data-action="evidence" type="button">${["verified", "text_insufficient"].includes(evidenceStatus) ? "证据详情" : evidenceStatus === "failed" ? "重试核验" : "核验全文"}</button>
         <button class="compact ghost ${feedback === "useful" ? "active" : ""}" data-action="feedback" data-value="useful" type="button">有用</button>
         <button class="compact ghost ${feedback === "stitchable" ? "active" : ""}" data-action="feedback" data-value="stitchable" type="button">可缝合</button>
         <button class="compact ghost ${feedback === "irrelevant" ? "active danger" : ""}" data-action="feedback" data-value="irrelevant" type="button">不相关</button>
@@ -351,6 +363,7 @@ function openAnalysisDrawer(material, result) {
   document.querySelector("#analysis-meta").textContent = `${sourceLabels[result.source] || "深度分析"} · ${result.model || "未知模型"}${result.cache_hit ? " · 已命中缓存" : ""}`;
   analysisContentEl.innerHTML = `
     ${result.warning ? `<div class="analysis-warning">${escapeHtml(result.warning)}</div>` : ""}
+    ${renderEvidenceAudit(material)}
     <section class="analysis-lead">
       <span class="analysis-area">${escapeHtml(analysis.integration_area)}</span>
       <strong>${escapeHtml(analysis.reusable_module)}</strong>
@@ -405,6 +418,78 @@ function openAnalysisDrawer(material, result) {
   document.body.classList.add("drawer-open");
 }
 
+function renderEvidenceAudit(material) {
+  const evidence = parseEvidence(material);
+  if (!evidence) {
+    return `
+      <section class="evidence-audit evidence-pending">
+        <div><span class="summary-label">Full-text Evidence</span><strong>尚未核验 PDF 全文</strong></div>
+        <p>当前分析仍以标题和摘要为主。关闭抽屉后点击素材卡上的“核验全文”。</p>
+      </section>
+    `;
+  }
+  const statusLabels = {
+    verified: "全文文本已提取",
+    text_insufficient: "PDF 文本不足",
+    failed: "全文核验失败",
+  };
+  const codeLabels = {
+    verified_repository: "仓库可访问",
+    reported_repository: "论文报告了仓库",
+    not_found: "未发现代码仓库",
+  };
+  const pdf = evidence.pdf || {};
+  const code = evidence.code || { status: "not_found", urls: [] };
+  return `
+    <section class="evidence-audit evidence-${escapeHtml(evidence.status || "pending")}">
+      <div class="evidence-summary">
+        <div><span class="summary-label">Full-text Evidence</span><strong>${escapeHtml(statusLabels[evidence.status] || "证据状态未知")}</strong></div>
+        <dl>
+          <div><dt>页数</dt><dd>${Number(pdf.page_count || 0)}</dd></div>
+          <div><dt>文本字符</dt><dd>${Number(pdf.text_chars || 0).toLocaleString()}</dd></div>
+          <div><dt>代码</dt><dd>${escapeHtml(codeLabels[code.status] || "未知")}</dd></div>
+        </dl>
+      </div>
+      ${(code.urls || []).length ? `
+        <div class="repository-links">
+          ${(code.urls || []).map((item) => `<a href="${safeExternalUrl(item.url)}" target="_blank" rel="noreferrer">${item.verified ? "已验证" : "待复核"} · ${escapeHtml(item.url)}</a>`).join("")}
+        </div>
+      ` : ""}
+      ${(evidence.sections || []).length ? `
+        <div class="evidence-sections">
+          ${(evidence.sections || []).map((section) => `
+            <details>
+              <summary>${escapeHtml(section.label)} · 第 ${Number(section.page || 0)} 页</summary>
+              <p>${escapeHtml(section.text)}</p>
+            </details>
+          `).join("")}
+        </div>
+      ` : ""}
+      ${(evidence.limitations || []).map((item) => `<p class="evidence-limitation">${escapeHtml(item)}</p>`).join("")}
+    </section>
+  `;
+}
+
+function parseEvidence(material) {
+  const raw = material?.full_text_json;
+  if (!raw) return null;
+  if (typeof raw === "object") return raw;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+function safeExternalUrl(value) {
+  try {
+    const url = new URL(String(value || ""));
+    return ["http:", "https:"].includes(url.protocol) ? escapeHtml(url.href) : "#";
+  } catch {
+    return "#";
+  }
+}
+
 function renderAnalysisList(title, items = []) {
   return `
     <div class="analysis-list">
@@ -428,6 +513,21 @@ async function analyzeMaterial(material, force = false) {
   openAnalysisDrawer(material, result);
   await loadMaterials();
   setStatus(result.warning || `${result.cache_hit ? "已打开" : "已生成"} ${result.source === "openai" ? "OpenAI" : "规则"}深度分析`);
+}
+
+async function verifyMaterial(material, force = false) {
+  setStatus("正在下载 PDF、提取正文并核验代码链接...");
+  const result = await api(`/api/evidence?paper_id=${material.id}${force ? "&force=1" : ""}`, {
+    method: "POST",
+  });
+  await loadMaterials();
+  const updated = state.materials.find((item) => item.id === material.id) || material;
+  if (result.status === "failed") {
+    setStatus(`全文核验失败：${result.error || "未知错误"}`);
+    return;
+  }
+  setStatus(result.status === "verified" ? "全文证据已提取，正在刷新深度分析..." : "PDF 文本不足，正在按可用证据刷新分析...");
+  await analyzeMaterial(updated, true);
 }
 
 function isRelevant(material) {
@@ -619,6 +719,21 @@ document.querySelector("#analyze-top").addEventListener("click", async () => {
   }
 });
 
+document.querySelector("#verify-top").addEventListener("click", async () => {
+  if (!state.currentProjectId) {
+    setStatus("请先保存项目画像");
+    return;
+  }
+  try {
+    setStatus("正在并行下载并核验 Top 10 PDF，这可能需要几十秒...");
+    const result = await api(`/api/evidence/top?topic_id=${state.currentProjectId}`, { method: "POST" });
+    await loadMaterials();
+    setStatus(`Top 10 核验完成：全文 ${result.verified_count}，文本不足 ${result.text_insufficient_count}，失败 ${result.failed_count}，缓存 ${result.cached_count}`);
+  } catch (error) {
+    setStatus(`Top 10 核验失败：${error.message}`);
+  }
+});
+
 document.querySelector("#refresh-projects").addEventListener("click", loadProjects);
 
 document.querySelector("#show-irrelevant").addEventListener("change", (event) => {
@@ -684,6 +799,12 @@ boardEl.addEventListener("click", async (event) => {
       setStatus(material.in_basket ? "已移出方案篮子" : "已加入方案篮子");
     } else if (button.dataset.action === "analyze") {
       await analyzeMaterial(material);
+    } else if (button.dataset.action === "evidence") {
+      if (["verified", "text_insufficient"].includes(material.full_text_status)) {
+        await analyzeMaterial(material);
+      } else {
+        await verifyMaterial(material, material.full_text_status === "failed");
+      }
     }
   } catch (error) {
     setStatus(`操作失败：${error.message}`);

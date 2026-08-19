@@ -13,6 +13,7 @@ class Settings:
     daily_hour: int
     openai_api_key: str = field(default="", repr=False)
     openai_model: str = "gpt-5-mini"
+    paper_cache_dir: Path = Path("data/papers")
 
 
 def load_settings() -> Settings:
@@ -23,4 +24,5 @@ def load_settings() -> Settings:
         daily_hour=int(os.getenv("AUTO_PAPER_DAILY_HOUR", "8")),
         openai_api_key=os.getenv("OPENAI_API_KEY", ""),
         openai_model=os.getenv("OPENAI_MODEL", "gpt-5-mini"),
+        paper_cache_dir=Path(os.getenv("AUTO_PAPER_CACHE", "data/papers")),
     )

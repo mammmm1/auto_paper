@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import json
 import mimetypes
 from dataclasses import replace
@@ -15,6 +16,10 @@ from auto_paper.config import Settings, load_settings
 from auto_paper.database import Database
 from auto_paper.deep_analyzer import analysis_engine, analysis_input_hash, analyze_material
 from auto_paper.exporter import papers_to_csv, papers_to_markdown
+from auto_paper.evidence_extractor import (
+    collect_paper_evidence,
+    evidence_input_hash,
+)
 from auto_paper.materializer import build_material_card, build_project_query
 from auto_paper.quality import build_quality_metrics, rank_materials
 from auto_paper.recommender import score_paper
@@ -130,6 +135,107 @@ class AutoPaperApp:
             "analyzed_count": len(results),
             "cached_count": sum(1 for item in results if item.get("cache_hit")),
             "profile_check": self.profile_check(topic_id),
+            "results": results,
+        }
+
+    def cached_evidence(self, paper_id: int) -> dict | None:
+        paper = self.db.get_paper(paper_id)
+        if paper is None:
+            return None
+        expected_hash = evidence_input_hash(paper)
+        raw = str(paper.get("full_text_json") or "")
+        is_current = bool(raw) and paper.get("full_text_input_hash") == expected_hash
+        if not is_current:
+            return {
+                "paper_id": paper_id,
+                "status": "pending",
+                "evidence": None,
+                "cache_hit": False,
+                "stale": bool(raw),
+                "error": "",
+            }
+        try:
+            evidence = json.loads(raw)
+        except json.JSONDecodeError:
+            evidence = None
+        return {
+            "paper_id": paper_id,
+            "status": paper.get("full_text_status") or "pending",
+            "evidence": evidence,
+            "cache_hit": evidence is not None,
+            "stale": False,
+            "error": paper.get("full_text_error") or "",
+            "updated_at": paper.get("full_text_updated_at") or "",
+        }
+
+    def collect_evidence(self, paper_id: int, force: bool = False) -> dict | None:
+        if not force:
+            cached = self.cached_evidence(paper_id)
+            if cached and cached.get("evidence"):
+                return cached
+        paper = self.db.get_paper(paper_id)
+        if paper is None:
+            return None
+        input_hash = evidence_input_hash(paper)
+        try:
+            evidence = collect_paper_evidence(
+                paper,
+                self.settings.paper_cache_dir,
+                force=force,
+            )
+            status = str(evidence.get("status") or "verified")
+            error = ""
+        except Exception as exc:  # noqa: BLE001 - surface per-paper extraction failure to the UI.
+            status = "failed"
+            error = _safe_message(exc)
+            evidence = {
+                "status": status,
+                "pdf": {"url": paper.get("pdf_url") or ""},
+                "sections": [],
+                "code": {"status": "not_found", "urls": []},
+                "limitations": [error],
+            }
+        self.db.save_full_text_evidence(
+            paper_id,
+            status,
+            json.dumps(evidence, ensure_ascii=False),
+            input_hash,
+            error,
+        )
+        return {
+            "paper_id": paper_id,
+            "status": status,
+            "evidence": evidence,
+            "cache_hit": False,
+            "stale": False,
+            "error": error,
+            "updated_at": self.db.get_paper(paper_id).get("full_text_updated_at", ""),
+        }
+
+    def collect_top_evidence(self, topic_id: int, force: bool = False, limit: int = 10) -> dict:
+        metrics = self.quality_metrics(topic_id)
+        paper_ids = [int(item) for item in metrics.get("top_material_ids", [])[: max(1, min(limit, 10))]]
+        results_by_id: dict[int, dict] = {}
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(3, len(paper_ids) or 1)) as executor:
+            futures = {
+                executor.submit(self.collect_evidence, paper_id, force): paper_id
+                for paper_id in paper_ids
+            }
+            for future in concurrent.futures.as_completed(futures):
+                paper_id = futures[future]
+                result = future.result()
+                if result:
+                    results_by_id[paper_id] = result
+        results = [results_by_id[paper_id] for paper_id in paper_ids if paper_id in results_by_id]
+        return {
+            "topic_id": topic_id,
+            "processed_count": len(results),
+            "verified_count": sum(1 for item in results if item.get("status") == "verified"),
+            "text_insufficient_count": sum(
+                1 for item in results if item.get("status") == "text_insufficient"
+            ),
+            "failed_count": sum(1 for item in results if item.get("status") == "failed"),
+            "cached_count": sum(1 for item in results if item.get("cache_hit")),
             "results": results,
         }
 
@@ -261,6 +367,18 @@ def create_handler(app: AutoPaperApp) -> type[BaseHTTPRequestHandler]:
                     return
                 self._json(result)
                 return
+            if route.path == "/api/evidence":
+                query = parse_qs(route.query)
+                paper_id = _optional_int(query.get("paper_id", [""])[0])
+                if not paper_id:
+                    self._json({"error": "missing paper_id"}, HTTPStatus.BAD_REQUEST)
+                    return
+                result = app.cached_evidence(paper_id)
+                if result is None:
+                    self._json({"error": "material not found"}, HTTPStatus.NOT_FOUND)
+                    return
+                self._json(result)
+                return
             if route.path == "/api/runs":
                 self._json(app.db.list_runs())
                 return
@@ -354,6 +472,31 @@ def create_handler(app: AutoPaperApp) -> type[BaseHTTPRequestHandler]:
                     self._json({"error": "project not found"}, HTTPStatus.NOT_FOUND)
                     return
                 self._json(app.analyze_top(topic_id, force=force))
+                return
+            if route.path == "/api/evidence":
+                query = parse_qs(route.query)
+                paper_id = _optional_int(query.get("paper_id", [""])[0])
+                force = query.get("force", ["0"])[0] == "1"
+                if not paper_id:
+                    self._json({"error": "missing paper_id"}, HTTPStatus.BAD_REQUEST)
+                    return
+                result = app.collect_evidence(paper_id, force=force)
+                if result is None:
+                    self._json({"error": "material not found"}, HTTPStatus.NOT_FOUND)
+                    return
+                self._json(result)
+                return
+            if route.path == "/api/evidence/top":
+                query = parse_qs(route.query)
+                topic_id = _optional_int(query.get("topic_id", [""])[0])
+                force = query.get("force", ["0"])[0] == "1"
+                if not topic_id:
+                    self._json({"error": "missing topic_id"}, HTTPStatus.BAD_REQUEST)
+                    return
+                if app.project(topic_id) is None:
+                    self._json({"error": "project not found"}, HTTPStatus.NOT_FOUND)
+                    return
+                self._json(app.collect_top_evidence(topic_id, force=force))
                 return
             self._json({"error": "Not found"}, HTTPStatus.NOT_FOUND)
 
@@ -469,6 +612,10 @@ def _optional_int(value: str) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _safe_message(error: Exception) -> str:
+    return " ".join(str(error).split())[:300]
 
 
 def main() -> None:

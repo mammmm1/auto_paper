@@ -17,12 +17,15 @@
 - 画像体检：自动发现任务类型、idea 与 Head 之间的明显冲突，避免检索方向被错误画像带偏。
 - 深度缝合分析：为单张或 Top 10 素材生成模块接口、最小实现、对照实验、风险、证据与置信度。
 - 双通道分析：默认使用本地规则；配置 OpenAI 后通过 Responses API 和严格 JSON Schema 生成，并按论文、画像与模型指纹缓存。
+- 全文证据：下载并缓存 PDF，提取方法、实验、消融、数据与结论段落，记录具体页码。
+- 代码核验：从正文和 PDF 链接中发现 GitHub / GitLab / Hugging Face / Bitbucket 地址，并区分已验证、仅报告和未发现。
 - 在线预览：内置 Web 页面按 Backbone / Neck / Head / Loss / Data / Training / Experiment 看板查看素材。
 - 下载导出：支持 Markdown 与 CSV 下载。
 
 ## 快速启动
 
 ```powershell
+python -m pip install -r requirements.txt
 python -m auto_paper.server
 ```
 
@@ -32,7 +35,9 @@ python -m auto_paper.server
 http://127.0.0.1:8000
 ```
 
-默认会创建一个遥感 Transformer 示例项目。你可以在页面里编辑项目画像，点击“搜索可缝合素材”后查看素材卡。第一版摘要、评分和缝合建议不依赖外部模型，但搜索需要当前网络可以访问 arXiv API。
+默认会创建一个遥感 Transformer 示例项目。你可以在页面里编辑项目画像，点击“搜索可缝合素材”后查看素材卡，再依次运行“核验 Top 10”和“分析 Top 10”。摘要、评分和规则缝合建议不依赖外部模型，但论文搜索与 PDF 下载需要当前网络可以访问 arXiv。
+
+PDF 提取使用 `pypdf`。它不包含 OCR：扫描版或字体编码异常的论文会标记为“文本不足”，需要后续 OCR 或人工复核，而不是被误判为没有方法与实验。
 
 深度分析不强制依赖模型。未配置 Key 时会使用规则模板，并明确提示尚未核验 PDF 与代码。需要启用 OpenAI 结构化分析时设置：
 
@@ -65,6 +70,7 @@ auto_paper/
   arxiv_client.py    # arXiv 搜索
   database.py        # SQLite 表结构和读写
   deep_analyzer.py   # 规则/OpenAI 结构化深度缝合分析
+  evidence_extractor.py # PDF 缓存、全文片段与代码仓库核验
   exporter.py        # Markdown/CSV 导出
   materializer.py    # 素材卡分类、评分与缝合动作建议
   quality.py         # 反馈重排与 Top 10 质量评估
@@ -87,6 +93,6 @@ public/
 ## 下一轮迭代建议
 
 1. 持续标注固定 Top 10，用真实反馈校准四级阈值与排序权重。
-2. 解析 PDF 全文和架构图，替换当前仅基于摘要的证据边界。
-3. 扩展 Semantic Scholar 与 Papers with Code，验证引用和真实代码仓库。
+2. 增加 OCR、架构图和实验表格解析，补齐当前纯文本提取的证据边界。
+3. 扩展 Semantic Scholar 与 Papers with Code，交叉验证引用和代码仓库。
 4. 增加轻量代码扫描，自动识别 backbone、neck、head、dataset，并把分析映射到真实文件。

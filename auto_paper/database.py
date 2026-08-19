@@ -95,6 +95,11 @@ class Database:
             self._ensure_column(conn, "papers", "deep_analysis_model", "TEXT NOT NULL DEFAULT ''")
             self._ensure_column(conn, "papers", "deep_analysis_input_hash", "TEXT NOT NULL DEFAULT ''")
             self._ensure_column(conn, "papers", "deep_analysis_updated_at", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(conn, "papers", "full_text_status", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(conn, "papers", "full_text_json", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(conn, "papers", "full_text_input_hash", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(conn, "papers", "full_text_updated_at", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(conn, "papers", "full_text_error", "TEXT NOT NULL DEFAULT ''")
 
     def _ensure_column(self, conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
         columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
@@ -279,6 +284,10 @@ class Database:
 
     def upsert_paper(self, paper: dict[str, Any]) -> None:
         with self.connect() as conn:
+            existing = conn.execute(
+                "SELECT * FROM papers WHERE topic_id = ? AND external_id = ?",
+                (paper["topic_id"], paper["external_id"]),
+            ).fetchone()
             conn.execute(
                 """
                 INSERT INTO papers (
@@ -326,6 +335,48 @@ class Database:
                 """,
                 paper,
             )
+            if existing is not None:
+                evidence_changed = any(
+                    str(existing[field] or "") != str(paper.get(field) or "")
+                    for field in ("pdf_url", "updated_at")
+                )
+                analysis_changed = evidence_changed or any(
+                    str(existing[field] or "") != str(paper.get(field) or "")
+                    for field in (
+                        "title",
+                        "abstract",
+                        "summary",
+                        "material_type",
+                        "integration_area",
+                        "integration_subtag",
+                        "stitch_action",
+                        "evidence_sources",
+                        "evidence_quote",
+                    )
+                )
+                paper_id = int(existing["id"])
+                if evidence_changed:
+                    conn.execute(
+                        """
+                        UPDATE papers
+                        SET full_text_status = '', full_text_json = '',
+                            full_text_input_hash = '', full_text_updated_at = '',
+                            full_text_error = ''
+                        WHERE id = ?
+                        """,
+                        (paper_id,),
+                    )
+                if analysis_changed:
+                    conn.execute(
+                        """
+                        UPDATE papers
+                        SET deep_analysis_json = '', deep_analysis_source = '',
+                            deep_analysis_model = '', deep_analysis_input_hash = '',
+                            deep_analysis_updated_at = ''
+                        WHERE id = ?
+                        """,
+                        (paper_id,),
+                    )
 
     def list_papers(self, topic_id: int | None = None, limit: int = 100) -> list[dict[str, Any]]:
         sql = """
@@ -402,10 +453,26 @@ class Database:
         assignments = ", ".join(f"{field} = ?" for field in fields)
         values = [analysis[field] for field in fields]
         with self.connect() as conn:
+            existing = conn.execute("SELECT * FROM papers WHERE id = ?", (paper_id,)).fetchone()
+            analysis_changed = existing is not None and any(
+                str(existing[field] or "") != str(analysis[field] or "")
+                for field in fields
+            )
             conn.execute(
                 f"UPDATE papers SET {assignments} WHERE id = ?",
                 [*values, paper_id],
             )
+            if analysis_changed:
+                conn.execute(
+                    """
+                    UPDATE papers
+                    SET deep_analysis_json = '', deep_analysis_source = '',
+                        deep_analysis_model = '', deep_analysis_input_hash = '',
+                        deep_analysis_updated_at = ''
+                    WHERE id = ?
+                    """,
+                    (paper_id,),
+                )
 
     def save_deep_analysis(
         self,
@@ -425,6 +492,28 @@ class Database:
                 WHERE id = ?
                 """,
                 (analysis_json, source, model, input_hash, paper_id),
+            )
+
+    def save_full_text_evidence(
+        self,
+        paper_id: int,
+        status: str,
+        evidence_json: str,
+        input_hash: str,
+        error: str = "",
+    ) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                UPDATE papers
+                SET full_text_status = ?, full_text_json = ?,
+                    full_text_input_hash = ?, full_text_updated_at = CURRENT_TIMESTAMP,
+                    full_text_error = ?, deep_analysis_json = '',
+                    deep_analysis_source = '', deep_analysis_model = '',
+                    deep_analysis_input_hash = '', deep_analysis_updated_at = ''
+                WHERE id = ?
+                """,
+                (status, evidence_json, input_hash, error, paper_id),
             )
 
     def list_basket(self, topic_id: int) -> list[dict[str, Any]]:

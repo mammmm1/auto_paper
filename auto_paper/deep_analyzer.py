@@ -7,7 +7,7 @@ import urllib.request
 from typing import Any
 
 
-ANALYSIS_SCHEMA_VERSION = "2026-08-19-v1"
+ANALYSIS_SCHEMA_VERSION = "2026-08-19-v2"
 RULE_MODEL = "rules-v1"
 ANALYSIS_AREAS = ["Backbone", "Neck", "Head", "Loss", "Data", "Training", "Experiment"]
 
@@ -107,6 +107,7 @@ def analysis_input_hash(
                 "stitch_action",
                 "evidence_sources",
                 "evidence_quote",
+                "full_text_json",
             )
         },
     }
@@ -167,19 +168,33 @@ def build_rule_analysis(paper: dict[str, Any], project: dict[str, Any]) -> dict[
     task = str(project.get("task_type") or "当前任务").strip()
     dataset = str(project.get("dataset") or "当前数据集").strip()
     metrics = _metrics_for_task(task)
+    full_text = _full_text_evidence(paper)
+    sections = full_text.get("sections") or []
+    method_section = next((item for item in sections if item.get("kind") == "method"), None)
+    experiment_section = next((item for item in sections if item.get("kind") == "experiment"), None)
     evidence = [f"标题证据：{title}"]
     evidence_quote = str(paper.get("evidence_quote") or "").strip()
     if evidence_quote:
         evidence.append(f"摘要证据：{_clip(evidence_quote, 180)}")
     elif abstract:
         evidence.append(f"摘要证据：{_clip(abstract, 180)}")
+    for section in sections[:3]:
+        evidence.append(
+            f"全文第 {section.get('page', '?')} 页 · {section.get('label', '正文')}："
+            f"{_clip(str(section.get('text') or ''), 220)}"
+        )
+    code = full_text.get("code") or {}
+    verified_code = next((item for item in code.get("urls", []) if item.get("verified")), None)
+    if verified_code:
+        evidence.append(f"代码仓库已验证可访问：{verified_code['url']}")
+
+    method_summary = summary or f"从标题和摘要判断，该工作尝试用 {subtag} 改进 {task}。"
+    if method_section:
+        method_summary = f"全文方法证据：{method_section.get('text') or method_summary}"
 
     return {
         "core_problem": _clip(summary or abstract or f"论文围绕 {title} 展开。", 260),
-        "method_summary": _clip(
-            summary or f"从标题和摘要判断，该工作尝试用 {subtag} 改进 {task}。",
-            320,
-        ),
+        "method_summary": _clip(method_summary, 420),
         "reusable_module": f"可提取为 {area} 环节的 {subtag} {material_type} 素材。",
         "project_match": (
             f"与项目“{project.get('name') or '当前项目'}”的 {task} 目标在 {area} 环节存在接点。"
@@ -213,18 +228,15 @@ def build_rule_analysis(paper: dict[str, Any], project: dict[str, Any]) -> dict[
                 "metrics": [*metrics, "显存占用", "训练稳定性"],
             },
         ],
-        "expected_gain": (
-            f"若素材判断成立，预期在 {task} 的核心指标或目标尺度分组指标上优于基线；"
-            "规则分析不提供未经实验验证的具体增益数值。"
-        ),
+        "expected_gain": _expected_gain(task, experiment_section),
         "risks": [
             "论文模块的张量尺寸、特征层级或训练目标可能与当前 pipeline 不兼容。",
-            "摘要中的总体提升不能证明该单一模块就是增益来源，需要消融验证。",
-            "缺少全文与代码核验时，复现成本和实现细节仍可能被低估。",
+            "总体提升不能证明该单一模块就是增益来源，需要消融验证。",
+            _reproduction_risk(full_text),
         ],
         "evidence": evidence,
-        "confidence": _rule_confidence(paper, abstract),
-        "limitations": "当前仅基于标题、摘要和已有素材卡生成，尚未核验 PDF 全文、公式、架构图或代码仓库。",
+        "confidence": _rule_confidence(paper, abstract, full_text),
+        "limitations": _analysis_limitations(full_text),
     }
 
 
@@ -274,6 +286,7 @@ def _request_openai_analysis(
                 "evidence_quote",
             )
         },
+        "full_text_evidence": _full_text_evidence(paper),
     }
     payload = {
         "model": model,
@@ -284,8 +297,9 @@ def _request_openai_analysis(
                     {
                         "type": "input_text",
                         "text": (
-                            "你是科研工程落地分析器。只使用给定项目画像、论文标题和摘要进行判断。"
-                            "不要声称读过全文或代码，不要编造结构、公式、指标和仓库。"
+                            "你是科研工程落地分析器。只使用给定项目画像、论文信息和全文证据片段进行判断。"
+                            "不要声称看过未提供的页面、公式、图表或代码，不要编造结构、指标和仓库。"
+                            "只有 code.status 为 verified_repository 时才能说仓库已验证可访问，且不能等同于代码可运行。"
                             "目标是输出可执行的最小接入方案和单变量实验。证据必须可追溯到输入文本，"
                             "不确定内容写入 limitations，所有字段使用中文。"
                         ),
@@ -391,7 +405,11 @@ def _metrics_for_task(task_type: str) -> list[str]:
     return ["主任务指标", "参数量", "推理速度", "训练稳定性"]
 
 
-def _rule_confidence(paper: dict[str, Any], abstract: str) -> int:
+def _rule_confidence(
+    paper: dict[str, Any],
+    abstract: str,
+    full_text: dict[str, Any] | None = None,
+) -> int:
     confidence = 52
     if len(abstract) >= 400:
         confidence += 10
@@ -399,7 +417,54 @@ def _rule_confidence(paper: dict[str, Any], abstract: str) -> int:
         confidence += 6
     if paper.get("integration_subtag"):
         confidence += 4
-    return min(confidence, 72)
+    evidence = full_text or {}
+    if evidence.get("status") == "verified":
+        confidence += min(16, len(evidence.get("sections") or []) * 3 + 4)
+    if (evidence.get("code") or {}).get("status") == "verified_repository":
+        confidence += 5
+    return min(confidence, 88 if evidence else 72)
+
+
+def _full_text_evidence(paper: dict[str, Any]) -> dict[str, Any]:
+    raw = paper.get("full_text_json")
+    if not raw:
+        return {}
+    if isinstance(raw, dict):
+        return raw
+    try:
+        value = json.loads(str(raw))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _expected_gain(task: str, experiment_section: dict[str, Any] | None) -> str:
+    base = (
+        f"若素材判断成立，预期在 {task} 的核心指标或目标尺度分组指标上优于基线；"
+        "规则分析不提供未经对照实验确认的具体增益数值。"
+    )
+    if not experiment_section:
+        return base
+    return f"{base} 全文实验线索：{_clip(str(experiment_section.get('text') or ''), 220)}"
+
+
+def _reproduction_risk(full_text: dict[str, Any]) -> str:
+    code_status = (full_text.get("code") or {}).get("status")
+    if code_status == "verified_repository":
+        return "已发现可访问仓库，但尚未安装依赖或运行训练，不能据此认定代码可复现。"
+    if code_status == "reported_repository":
+        return "论文报告了代码地址，但当前未验证可访问性，需要人工复核。"
+    return "尚未发现可验证的代码仓库，需要预留复现与接口适配时间。"
+
+
+def _analysis_limitations(full_text: dict[str, Any]) -> str:
+    if full_text.get("status") == "verified":
+        limitations = "已核验 PDF 正文文本片段，但尚未解析公式、架构图和实验表格，也未运行代码。"
+        extra = full_text.get("limitations") or []
+        return f"{limitations} {' '.join(str(item) for item in extra)}".strip()
+    if full_text.get("status") == "text_insufficient":
+        return "PDF 已下载，但可提取文本不足，当前仍主要依赖标题与摘要；需要 OCR 或人工阅读。"
+    return "当前仅基于标题、摘要和已有素材卡生成，尚未核验 PDF 全文、公式、架构图或代码仓库。"
 
 
 def _clip(text: str, limit: int) -> str:

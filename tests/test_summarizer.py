@@ -6,6 +6,12 @@ from auto_paper.deep_analyzer import (
     build_rule_analysis,
     extract_response_text,
 )
+from auto_paper.evidence_extractor import (
+    evidence_input_hash,
+    extract_code_urls,
+    extract_evidence_from_pages,
+)
+from auto_paper.exporter import papers_to_csv, papers_to_markdown
 from auto_paper.materializer import build_material_card, build_project_query
 from auto_paper.profile_validator import validate_project_profile
 from auto_paper.quality import build_quality_metrics, rank_materials
@@ -344,6 +350,142 @@ class DeepAnalyzerTests(unittest.TestCase):
         }
 
         self.assertEqual(extract_response_text(response), '{"ok": true}')
+
+    def test_full_text_evidence_increases_grounding(self):
+        paper = {
+            **self.paper,
+            "full_text_json": json.dumps(
+                {
+                    "status": "verified",
+                    "sections": [
+                        {
+                            "kind": "method",
+                            "label": "方法/架构",
+                            "page": 4,
+                            "text": "Our method routes multi-scale features through adaptive branches.",
+                        }
+                    ],
+                    "code": {
+                        "status": "verified_repository",
+                        "urls": [{"url": "https://github.com/example/model", "verified": True}],
+                    },
+                    "limitations": [],
+                },
+                ensure_ascii=False,
+            ),
+        }
+
+        analysis = build_rule_analysis(paper, self.project)
+
+        self.assertIn("全文方法证据", analysis["method_summary"])
+        self.assertTrue(any("第 4 页" in item for item in analysis["evidence"]))
+        self.assertGreater(analysis["confidence"], 72)
+        self.assertIn("尚未解析公式", analysis["limitations"])
+
+
+class EvidenceExtractorTests(unittest.TestCase):
+    def test_extracts_method_experiment_and_ablation_sections(self):
+        pages = [
+            "Introduction. This paper studies remote sensing detection.",
+            "Proposed Method. Our method introduces an adaptive scale router and feature fusion module.",
+            "Experiments. We evaluate on DOTA. Ablation Study. Removing the router reduces accuracy.",
+        ]
+
+        sections = extract_evidence_from_pages(pages)
+        kinds = {item["kind"] for item in sections}
+
+        self.assertIn("method", kinds)
+        self.assertIn("experiment", kinds)
+        self.assertIn("ablation", kinds)
+        method = next(item for item in sections if item["kind"] == "method")
+        self.assertEqual(method["page"], 2)
+
+    def test_section_heading_wins_over_abstract_mention(self):
+        sections = extract_evidence_from_pages(
+            [
+                "Experiments on four benchmarks show strong performance in the abstract.",
+                "V. EXPERIMENTALRESULTS\nWe compare against controlled baselines on DOTA.",
+            ]
+        )
+
+        experiment = next(item for item in sections if item["kind"] == "experiment")
+        self.assertEqual(experiment["page"], 2)
+        self.assertEqual(experiment["matched_term"], "EXPERIMENTALRESULTS")
+
+    def test_extracts_and_normalizes_supported_code_urls(self):
+        urls = extract_code_urls(
+            "Code: https://github.com/Example/ScaleNet). Mirror: https://example.com/not-code"
+        )
+
+        self.assertEqual(urls, ["https://github.com/Example/ScaleNet"])
+
+    def test_evidence_hash_changes_with_pdf_version(self):
+        first = evidence_input_hash(
+            {"pdf_url": "https://arxiv.org/pdf/1", "external_id": "1", "updated_at": "v1"}
+        )
+        second = evidence_input_hash(
+            {"pdf_url": "https://arxiv.org/pdf/1", "external_id": "1", "updated_at": "v2"}
+        )
+
+        self.assertNotEqual(first, second)
+
+
+class ExporterTests(unittest.TestCase):
+    def test_exports_full_text_and_deep_analysis_evidence(self):
+        paper = {
+            "topic_name": "遥感检测",
+            "title": "Scale Router",
+            "authors": "Author",
+            "published_at": "2026-08-01",
+            "recommendation_score": 80,
+            "ranking_score": 82,
+            "relevance_tier": "direct",
+            "stitchability_score": 85,
+            "relevance_score": 90,
+            "code_availability_score": 70,
+            "material_type": "module",
+            "integration_area": "Neck",
+            "integration_subtag": "Feature Fusion",
+            "stitch_difficulty": "中",
+            "stitch_action": "接入尺度路由",
+            "evidence_sources": "全文",
+            "evidence_quote": "scale-aware routing",
+            "summary": "摘要",
+            "entry_url": "https://arxiv.org/abs/1",
+            "pdf_url": "https://arxiv.org/pdf/1",
+            "full_text_status": "verified",
+            "full_text_json": json.dumps(
+                {
+                    "pdf": {"page_count": 10},
+                    "sections": [{"label": "方法/架构", "page": 4, "text": "method evidence"}],
+                    "code": {
+                        "status": "verified_repository",
+                        "urls": [{"url": "https://github.com/example/model", "verified": True}],
+                    },
+                },
+                ensure_ascii=False,
+            ),
+            "deep_analysis_source": "rules",
+            "deep_analysis_json": json.dumps(
+                {
+                    "reusable_module": "尺度路由模块",
+                    "project_match": "可接入 FPN",
+                    "confidence": 84,
+                    "minimal_implementation": ["冻结基线", "接入模块"],
+                    "limitations": "尚未运行代码",
+                },
+                ensure_ascii=False,
+            ),
+        }
+
+        markdown = papers_to_markdown([paper])
+        csv_output = papers_to_csv([paper])
+
+        self.assertIn("第 4 页", markdown)
+        self.assertIn("github.com/example/model", markdown)
+        self.assertIn("深度缝合分析", markdown)
+        self.assertIn("full_text_pages", csv_output)
+        self.assertIn("verified_repository", csv_output)
 
 
 if __name__ == "__main__":
