@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ssl
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -8,7 +9,7 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 
 
-ARXIV_API_URL = "http://export.arxiv.org/api/query"
+ARXIV_API_URL = "https://export.arxiv.org/api/query"
 ATOM_NS = {"atom": "http://www.w3.org/2005/Atom", "arxiv": "http://arxiv.org/schemas/atom"}
 
 
@@ -79,15 +80,28 @@ def _find_pdf_url(entry: ET.Element) -> str:
 
 
 def _read_url(request: urllib.request.Request) -> bytes:
-    try:
-        with urllib.request.urlopen(request, timeout=30) as response:
-            return response.read()
-    except urllib.error.URLError as exc:
-        if "CERTIFICATE_VERIFY_FAILED" not in str(exc):
-            raise
-        # Windows Python installations can miss CA roots. arXiv data is public
-        # metadata, so the MVP falls back to an unverified context after a
-        # normal verified request fails.
-        context = ssl._create_unverified_context()
-        with urllib.request.urlopen(request, timeout=30, context=context) as response:
-            return response.read()
+    last_error: Exception | None = None
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(request, timeout=25) as response:
+                return response.read()
+        except urllib.error.URLError as exc:
+            last_error = exc
+            if "CERTIFICATE_VERIFY_FAILED" in str(exc):
+                try:
+                    # arXiv metadata is public. Some Windows Python installs lack
+                    # CA roots, so retry without verification only for this case.
+                    context = ssl._create_unverified_context()
+                    with urllib.request.urlopen(request, timeout=25, context=context) as response:
+                        return response.read()
+                except (urllib.error.URLError, TimeoutError) as fallback_exc:
+                    last_error = fallback_exc
+        except TimeoutError as exc:
+            last_error = exc
+
+        if attempt < 2:
+            time.sleep(1.5 * (attempt + 1))
+
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("arXiv request failed without an error")

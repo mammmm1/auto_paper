@@ -44,6 +44,53 @@ TYPE_SIGNALS = {
     "idea": ["propose", "introduce", "present", "hypothesis", "approach"],
 }
 
+REMOTE_DOMAIN_SIGNALS = [
+    "remote sensing",
+    "earth observation",
+    "satellite image",
+    "satellite imagery",
+    "aerial image",
+    "aerial imagery",
+    "overhead image",
+    "geospatial",
+    "dota",
+    "dior",
+    "nwpu",
+    "sar image",
+    "hyperspectral",
+]
+
+VISION_TASK_SIGNALS = [
+    "object detection",
+    "small object",
+    "tiny object",
+    "oriented object",
+    "semantic segmentation",
+    "instance segmentation",
+    "change detection",
+]
+
+METHOD_SIGNALS = [
+    "transformer",
+    "attention",
+    "multi-scale",
+    "multiscale",
+    "feature pyramid",
+    "feature fusion",
+    "swin",
+    "vision transformer",
+]
+
+UNRELATED_DOMAIN_SIGNALS = [
+    "wireless communication",
+    "6g network",
+    "teleoperation",
+    "robotic manipulation",
+    "medical imaging",
+    "drug discovery",
+    "large language model",
+]
+
 
 def build_material_card(candidate: Any, project: dict[str, Any], summary: str) -> dict[str, Any]:
     text = f"{candidate.title} {candidate.abstract}".lower()
@@ -51,8 +98,11 @@ def build_material_card(candidate: Any, project: dict[str, Any], summary: str) -
     subtag = _subtag(area, text)
     material_type = _material_type(text)
     relevance = _relevance_score(text, project)
+    is_relevant, filter_reason = _relevance_gate(text, project, relevance)
     code_availability = _code_score(text)
     stitchability = _stitchability_score(area_score, relevance, code_availability, text, project)
+    if not is_relevant:
+        stitchability = min(stitchability, 35.0)
     difficulty = _difficulty(area, text, project)
     action = _stitch_action(area, subtag, material_type, project)
     evidence_sources, evidence_quote = _evidence(candidate.title, candidate.abstract, area, project)
@@ -64,6 +114,8 @@ def build_material_card(candidate: Any, project: dict[str, Any], summary: str) -
         "stitch_action": action,
         "stitch_difficulty": difficulty,
         "relevance_score": relevance,
+        "is_relevant": is_relevant,
+        "filter_reason": filter_reason,
         "stitchability_score": stitchability,
         "code_availability_score": code_availability,
         "recommendation_score": stitchability,
@@ -85,12 +137,30 @@ def build_project_query(project: dict[str, Any]) -> str:
         project.get("head", ""),
         project.get("dataset", ""),
     ]
-    terms = _keywords(" ".join(parts))
-    remote_terms = {"remote", "sensing", "object", "detection", "segmentation", "transformer"}
-    selected = sorted((terms | remote_terms) - {"image", "images"})[:12]
-    if not selected:
-        return "cat:cs.CV AND transformer"
-    query = " OR ".join(f'"{term}"' if "-" in term else term for term in selected)
+    profile_text = " ".join(str(part) for part in parts).lower()
+    if _is_remote_sensing_project(profile_text):
+        domain_clause = (
+            '(all:"remote sensing" OR all:"earth observation" OR '
+            'all:"satellite image" OR all:"aerial image" OR all:geospatial '
+            'OR all:DOTA OR all:DIOR)'
+        )
+        focus_terms = []
+        for signal in VISION_TASK_SIGNALS + METHOD_SIGNALS:
+            if signal in profile_text:
+                focus_terms.append(signal)
+        if "目标检测" in profile_text:
+            focus_terms.extend(["object detection", "small object"])
+        if "分割" in profile_text:
+            focus_terms.extend(["semantic segmentation", "instance segmentation"])
+        focus_terms.extend(["transformer", "multi-scale"])
+        selected = list(dict.fromkeys(focus_terms))[:8]
+        focus_clause = " OR ".join(f'all:"{term}"' for term in selected)
+        return f"cat:cs.CV AND {domain_clause} AND ({focus_clause})"
+
+    terms = sorted(_keywords(profile_text))[:10]
+    if not terms:
+        return "cat:cs.CV AND all:transformer"
+    query = " OR ".join(f'all:"{term}"' if "-" in term else f"all:{term}" for term in terms)
     return f"cat:cs.CV AND ({query})"
 
 
@@ -136,6 +206,16 @@ def _material_type(text: str) -> str:
 
 
 def _relevance_score(text: str, project: dict[str, Any]) -> float:
+    profile_text = " ".join(str(value) for value in project.values()).lower()
+    if _is_remote_sensing_project(profile_text):
+        domain_hits = _signal_hits(text, REMOTE_DOMAIN_SIGNALS)
+        task_hits = _signal_hits(text, VISION_TASK_SIGNALS)
+        method_hits = _signal_hits(text, METHOD_SIGNALS)
+        negative_hits = _signal_hits(text, UNRELATED_DOMAIN_SIGNALS)
+        score = 12 + min(domain_hits * 24, 42) + min(task_hits * 13, 26) + min(method_hits * 6, 20)
+        score -= min(negative_hits * 18, 36)
+        return round(max(0, min(score, 100)), 1)
+
     project_terms = _keywords(
         " ".join(
             str(project.get(field, ""))
@@ -146,6 +226,36 @@ def _relevance_score(text: str, project: dict[str, Any]) -> float:
         return 40.0
     hits = sum(1 for term in project_terms if term in text)
     return round(min(35 + hits / len(project_terms) * 65, 100), 1)
+
+
+def _relevance_gate(text: str, project: dict[str, Any], relevance: float) -> tuple[bool, str]:
+    profile_text = " ".join(str(value) for value in project.values()).lower()
+    if not _is_remote_sensing_project(profile_text):
+        return relevance >= 45, "基于项目关键词覆盖度判断"
+
+    domain_hits = [signal for signal in REMOTE_DOMAIN_SIGNALS if signal in text]
+    task_hits = [signal for signal in VISION_TASK_SIGNALS if signal in text]
+    method_hits = [signal for signal in METHOD_SIGNALS if signal in text]
+    unrelated_hits = [signal for signal in UNRELATED_DOMAIN_SIGNALS if signal in text]
+
+    if domain_hits:
+        return True, f"命中遥感领域证据：{', '.join(domain_hits[:2])}"
+    if task_hits and method_hits and not unrelated_hits:
+        return True, "未直接命中遥感词，但任务与方法均匹配，可作为跨领域迁移素材"
+    if unrelated_hits:
+        return False, f"疑似来自无关领域：{', '.join(unrelated_hits[:2])}"
+    return False, "缺少遥感领域证据，且未同时命中视觉任务与可迁移方法"
+
+
+def _is_remote_sensing_project(text: str) -> bool:
+    return any(
+        signal in text
+        for signal in ["遥感", "remote sensing", "earth observation", "dota", "dior", "nwpu"]
+    )
+
+
+def _signal_hits(text: str, signals: list[str]) -> int:
+    return sum(1 for signal in signals if signal in text)
 
 
 def _stitchability_score(
@@ -230,4 +340,3 @@ def _keywords(text: str) -> set[str]:
 def _split_sentences(text: str) -> list[str]:
     normalized = " ".join(text.split())
     return [piece.strip() for piece in re.split(r"(?<=[.!?])\s+", normalized) if piece.strip()]
-

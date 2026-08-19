@@ -84,6 +84,11 @@ class Database:
             self._ensure_column(conn, "papers", "code_availability_score", "REAL NOT NULL DEFAULT 0")
             self._ensure_column(conn, "papers", "evidence_sources", "TEXT NOT NULL DEFAULT ''")
             self._ensure_column(conn, "papers", "evidence_quote", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(conn, "papers", "is_relevant", "INTEGER NOT NULL DEFAULT 1")
+            self._ensure_column(conn, "papers", "filter_reason", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(conn, "papers", "user_feedback", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(conn, "papers", "is_read", "INTEGER NOT NULL DEFAULT 0")
+            self._ensure_column(conn, "papers", "in_basket", "INTEGER NOT NULL DEFAULT 0")
 
     def _ensure_column(self, conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
         columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
@@ -254,7 +259,8 @@ class Database:
                     updated_at, pdf_url, entry_url, material_type,
                     integration_area, integration_subtag, stitch_action,
                     stitch_difficulty, relevance_score, stitchability_score,
-                    code_availability_score, evidence_sources, evidence_quote
+                    code_availability_score, evidence_sources, evidence_quote,
+                    is_relevant, filter_reason
                 )
                 VALUES (
                     :topic_id, :external_id, :title, :authors, :abstract, :summary,
@@ -262,7 +268,8 @@ class Database:
                     :updated_at, :pdf_url, :entry_url, :material_type,
                     :integration_area, :integration_subtag, :stitch_action,
                     :stitch_difficulty, :relevance_score, :stitchability_score,
-                    :code_availability_score, :evidence_sources, :evidence_quote
+                    :code_availability_score, :evidence_sources, :evidence_quote,
+                    :is_relevant, :filter_reason
                 )
                 ON CONFLICT(topic_id, external_id) DO UPDATE SET
                     title = excluded.title,
@@ -284,7 +291,9 @@ class Database:
                     stitchability_score = excluded.stitchability_score,
                     code_availability_score = excluded.code_availability_score,
                     evidence_sources = excluded.evidence_sources,
-                    evidence_quote = excluded.evidence_quote
+                    evidence_quote = excluded.evidence_quote,
+                    is_relevant = excluded.is_relevant,
+                    filter_reason = excluded.filter_reason
                 """,
                 paper,
             )
@@ -303,6 +312,71 @@ class Database:
         params.append(limit)
         with self.connect() as conn:
             return [dict(row) for row in conn.execute(sql, params).fetchall()]
+
+    def update_paper_state(self, paper_id: int, fields: dict[str, Any]) -> dict[str, Any] | None:
+        allowed = {"user_feedback", "is_read", "in_basket"}
+        updates = {key: value for key, value in fields.items() if key in allowed}
+        if "user_feedback" in updates:
+            feedback = str(updates["user_feedback"])
+            if feedback not in {"", "useful", "stitchable", "irrelevant"}:
+                raise ValueError("invalid feedback")
+            updates["user_feedback"] = feedback
+            if feedback == "irrelevant":
+                updates["in_basket"] = 0
+        for field in ["is_read", "in_basket"]:
+            if field in updates:
+                updates[field] = 1 if bool(updates[field]) else 0
+
+        with self.connect() as conn:
+            row = conn.execute("SELECT * FROM papers WHERE id = ?", (paper_id,)).fetchone()
+            if row is None:
+                return None
+            if updates:
+                assignments = ", ".join(f"{key} = ?" for key in updates)
+                conn.execute(
+                    f"UPDATE papers SET {assignments} WHERE id = ?",
+                    [*updates.values(), paper_id],
+                )
+            updated = conn.execute("SELECT * FROM papers WHERE id = ?", (paper_id,)).fetchone()
+            return dict(updated)
+
+    def update_paper_analysis(self, paper_id: int, analysis: dict[str, Any]) -> None:
+        fields = [
+            "material_type",
+            "integration_area",
+            "integration_subtag",
+            "stitch_action",
+            "stitch_difficulty",
+            "relevance_score",
+            "stitchability_score",
+            "code_availability_score",
+            "recommendation_reason",
+            "evidence_sources",
+            "evidence_quote",
+            "is_relevant",
+            "filter_reason",
+        ]
+        assignments = ", ".join(f"{field} = ?" for field in fields)
+        values = [analysis[field] for field in fields]
+        with self.connect() as conn:
+            conn.execute(
+                f"UPDATE papers SET {assignments} WHERE id = ?",
+                [*values, paper_id],
+            )
+
+    def list_basket(self, topic_id: int) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT papers.*, topics.name AS topic_name
+                FROM papers
+                JOIN topics ON topics.id = papers.topic_id
+                WHERE papers.topic_id = ? AND papers.in_basket = 1
+                ORDER BY stitchability_score DESC, published_at DESC
+                """,
+                (topic_id,),
+            ).fetchall()
+            return [dict(row) for row in rows]
 
     def record_run(self, topic_id: int | None, status: str, message: str, fetched_count: int = 0) -> None:
         with self.connect() as conn:

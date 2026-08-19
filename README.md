@@ -9,6 +9,9 @@
 - 自动摘要：先用轻量启发式摘要跑通闭环，后续可替换为 LLM 总结。
 - 素材卡：为论文生成可接入位置、二级标签、缝合动作、接入难度和证据来源。
 - 三分排序：生成相关性、可缝合度、代码可用性三类评分，主排序使用可缝合度。
+- 质量过滤：使用“领域门槛 + 跨领域可迁移条件”折叠低相关素材，并保留判定原因供人工复核。
+- 人工反馈：支持标记有用、可缝合、不相关、已读，并持久化到 SQLite。
+- 方案篮子：选择 3-5 张素材后，按接入顺序生成第一轮实验路线、验证步骤和风险提醒。
 - 在线预览：内置 Web 页面按 Backbone / Neck / Head / Loss / Data / Training / Experiment 看板查看素材。
 - 下载导出：支持 Markdown 与 CSV 下载。
 
@@ -49,6 +52,7 @@ auto_paper/
   exporter.py        # Markdown/CSV 导出
   materializer.py    # 素材卡分类、评分与缝合动作建议
   recommender.py     # 推荐分与推荐理由
+  route_builder.py   # 方案篮子与实验路线生成
   scheduler.py       # 每日后台任务
   server.py          # HTTP API 与静态页面服务
   summarizer.py      # 摘要生成
@@ -64,7 +68,7 @@ public/
 
 ## 下一轮迭代建议
 
-1. 接入 OpenAI/本地模型，增强素材卡的缝合动作和实验路线生成。
-2. 增加方案篮子，把 3-5 张素材卡组合成可执行实验路线。
-3. 增加轻量代码扫描，自动识别 backbone、neck、head、dataset。
-4. 扩展数据源：Semantic Scholar、Papers with Code、DBLP。
+1. 用人工反馈校准过滤阈值与推荐排序，验证 Top 10 有效率。
+2. 接入 OpenAI/本地模型，增强素材卡的缝合动作和实验路线生成。
+3. 扩展数据源：Semantic Scholar、Papers with Code、DBLP。
+4. 增加轻量代码扫描，自动识别 backbone、neck、head、dataset。

@@ -2,6 +2,8 @@ const state = {
   projects: [],
   currentProjectId: null,
   materials: [],
+  showIrrelevant: false,
+  route: null,
 };
 
 const statusEl = document.querySelector("#status");
@@ -10,6 +12,11 @@ const boardEl = document.querySelector("#board");
 const metricsEl = document.querySelector("#board-metrics");
 const profileSummaryEl = document.querySelector("#profile-summary");
 const formEl = document.querySelector("#project-form");
+const basketPanelEl = document.querySelector("#basket-panel");
+const basketItemsEl = document.querySelector("#basket-items");
+const basketCountEl = document.querySelector("#basket-count");
+const routeResultEl = document.querySelector("#route-result");
+const filterSummaryEl = document.querySelector("#filter-summary");
 const AREAS = ["Backbone", "Neck", "Head", "Loss", "Data", "Training", "Experiment"];
 const AREA_LABELS = {
   Backbone: "骨干",
@@ -57,12 +64,19 @@ async function loadProjects() {
   renderProjects();
   fillProjectForm(currentProject());
   renderProfileSummary();
+  updateProjectLinks();
 }
 
 async function loadMaterials() {
   const query = state.currentProjectId ? `?topic_id=${state.currentProjectId}` : "";
   state.materials = await api(`/api/papers${query}`);
   renderBoard();
+}
+
+function updateProjectLinks() {
+  const suffix = state.currentProjectId ? `&topic_id=${state.currentProjectId}` : "";
+  document.querySelector("#export-markdown").href = `/api/export?format=markdown${suffix}`;
+  document.querySelector("#export-csv").href = `/api/export?format=csv${suffix}`;
 }
 
 function currentProject() {
@@ -109,17 +123,25 @@ function renderProfileSummary() {
 
 function renderBoard() {
   renderMetrics();
-  if (state.materials.length === 0) {
+  renderBasket();
+  const hiddenCount = state.materials.filter((material) => !isRelevant(material)).length;
+  const visibleMaterials = state.showIrrelevant
+    ? state.materials
+    : state.materials.filter(isRelevant);
+  filterSummaryEl.textContent = hiddenCount
+    ? `已隐藏 ${hiddenCount} 张低相关素材`
+    : "当前没有低相关素材";
+  if (visibleMaterials.length === 0) {
     boardEl.innerHTML = `
       <article class="empty-state">
         <strong>等待素材进入工作台</strong>
-        <p>保存项目画像后运行搜索，系统会把论文转成按接入位置组织的素材卡。</p>
+        <p>${state.materials.length ? "低相关素材已被折叠，可使用上方开关查看。" : "保存项目画像后运行搜索，系统会把论文转成按接入位置组织的素材卡。"}</p>
       </article>
     `;
     return;
   }
   boardEl.innerHTML = AREAS.map((area) => {
-    const materials = state.materials.filter((material) => material.integration_area === area);
+    const materials = visibleMaterials.filter((material) => material.integration_area === area);
     return `
       <section class="board-column" data-area="${area}">
         <header>
@@ -143,27 +165,35 @@ function renderBoard() {
 }
 
 function renderMetrics() {
-  const total = state.materials.length;
-  const best = state.materials.reduce(
+  const relevant = state.materials.filter(isRelevant);
+  const total = relevant.length;
+  const best = relevant.reduce(
     (max, material) => Math.max(max, Number(material.stitchability_score || 0)),
     0,
   );
-  const codeReady = state.materials.filter(
+  const codeReady = relevant.filter(
     (material) => Number(material.code_availability_score || 0) >= 55,
   ).length;
+  const basketSize = state.materials.filter((material) => Boolean(material.in_basket)).length;
   metricsEl.innerHTML = `
-    <div><span>素材卡</span><strong>${total}</strong></div>
+    <div><span>有效素材</span><strong>${total}</strong></div>
     <div><span>最高缝合度</span><strong>${best.toFixed(1)}</strong></div>
     <div><span>代码线索</span><strong>${codeReady}</strong></div>
+    <div><span>方案篮子</span><strong>${basketSize}</strong></div>
   `;
 }
 
 function renderMaterialCard(paper) {
   const stitchScore = Number(paper.stitchability_score || paper.recommendation_score || 0);
+  const feedback = paper.user_feedback || "";
   return `
-    <article class="material-card">
+    <article class="material-card ${isRelevant(paper) ? "" : "low-relevance"}" data-material-id="${paper.id}">
       <div class="card-topline">
-        <span>${escapeHtml(paper.material_type)}</span>
+        <div class="card-flags">
+          <span>${escapeHtml(paper.material_type)}</span>
+          ${isRelevant(paper) ? "" : '<span class="warning-flag">低相关</span>'}
+          ${paper.is_read ? '<span class="read-flag">已读</span>' : ""}
+        </div>
         <strong>${stitchScore.toFixed(1)}</strong>
       </div>
       <h4>${escapeHtml(paper.title)}</h4>
@@ -178,6 +208,7 @@ function renderMaterialCard(paper) {
       </dl>
       <p class="action-text">${escapeHtml(paper.stitch_action || paper.recommendation_reason)}</p>
       <p class="evidence"><strong>${escapeHtml(paper.evidence_sources || "证据")}</strong>：${escapeHtml(paper.evidence_quote || paper.summary)}</p>
+      <p class="filter-reason">${escapeHtml(paper.filter_reason || "基于项目画像判断相关性")}</p>
       <details>
         <summary>摘要</summary>
         <p>${escapeHtml(paper.summary)}</p>
@@ -187,11 +218,92 @@ function renderMaterialCard(paper) {
         <span>${escapeHtml(paper.authors)}</span>
       </div>
       <div class="links">
-        <a href="${paper.entry_url}" target="_blank" rel="noreferrer">论文页</a>
-        <a href="${paper.pdf_url}" target="_blank" rel="noreferrer">PDF</a>
+        <a href="${escapeHtml(paper.entry_url)}" target="_blank" rel="noreferrer">论文页</a>
+        <a href="${escapeHtml(paper.pdf_url)}" target="_blank" rel="noreferrer">PDF</a>
+      </div>
+      <div class="card-actions">
+        <button class="compact ghost ${feedback === "useful" ? "active" : ""}" data-action="feedback" data-value="useful" type="button">有用</button>
+        <button class="compact ghost ${feedback === "stitchable" ? "active" : ""}" data-action="feedback" data-value="stitchable" type="button">可缝合</button>
+        <button class="compact ghost ${feedback === "irrelevant" ? "active danger" : ""}" data-action="feedback" data-value="irrelevant" type="button">不相关</button>
+        <button class="compact ghost ${paper.is_read ? "active" : ""}" data-action="read" type="button">已读</button>
+        <button class="compact basket-button ${paper.in_basket ? "active" : ""}" data-action="basket" type="button">${paper.in_basket ? "移出方案" : "加入方案"}</button>
       </div>
     </article>
   `;
+}
+
+function isRelevant(material) {
+  if (["useful", "stitchable"].includes(material.user_feedback)) return true;
+  if (material.user_feedback === "irrelevant") return false;
+  return Boolean(material.is_relevant);
+}
+
+function renderBasket() {
+  const selected = state.materials.filter((material) => Boolean(material.in_basket));
+  basketCountEl.textContent = selected.length;
+  if (selected.length === 0) {
+    basketItemsEl.innerHTML = '<p class="basket-empty">还没有选择素材。建议先加入 3-5 张覆盖不同接入位置的卡片。</p>';
+    routeResultEl.innerHTML = "";
+    return;
+  }
+  basketItemsEl.innerHTML = selected
+    .map(
+      (material) => `
+        <div class="basket-item">
+          <span>${escapeHtml(material.integration_area)}</span>
+          <strong>${escapeHtml(material.title)}</strong>
+          <button class="icon-button ghost" data-remove-basket="${material.id}" type="button" title="移出方案" aria-label="移出方案">×</button>
+        </div>
+      `,
+    )
+    .join("");
+}
+
+function renderRoute() {
+  const route = state.route;
+  if (!route) {
+    routeResultEl.innerHTML = "";
+    return;
+  }
+  routeResultEl.innerHTML = `
+    <div class="route-heading">
+      <span class="summary-label">Generated Route</span>
+      <h4>${escapeHtml(route.name)}</h4>
+      <p>${escapeHtml(route.selection_summary)}</p>
+    </div>
+    <dl class="route-overview">
+      <div><dt>研究假设</dt><dd>${escapeHtml(route.hypothesis)}</dd></div>
+      <div><dt>基线</dt><dd>${escapeHtml(route.baseline)}</dd></div>
+      <div><dt>数据集</dt><dd>${escapeHtml(route.dataset)}</dd></div>
+      <div><dt>组合表述</dt><dd>${escapeHtml(route.innovation_statement)}</dd></div>
+    </dl>
+    <ol class="route-steps">
+      ${route.steps.map((step) => `
+        <li>
+          <span>${escapeHtml(step.area)} · 难度 ${escapeHtml(step.difficulty)}</span>
+          <strong>${escapeHtml(step.title)}</strong>
+          <p>${escapeHtml(step.action)}</p>
+        </li>
+      `).join("")}
+    </ol>
+    <div class="route-notes">
+      <div><strong>验证顺序</strong>${route.validation.map((item) => `<p>${escapeHtml(item)}</p>`).join("")}</div>
+      <div><strong>风险提醒</strong>${route.risks.map((item) => `<p>${escapeHtml(item)}</p>`).join("")}</div>
+    </div>
+  `;
+}
+
+async function updateMaterial(material, payload) {
+  const updated = await api(`/api/materials?id=${material.id}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+  state.materials = state.materials.map((item) =>
+    item.id === material.id ? { ...item, ...updated } : item,
+  );
+  state.route = null;
+  routeResultEl.innerHTML = "";
+  renderBoard();
 }
 
 function fillProjectForm(project) {
@@ -261,6 +373,7 @@ projectsEl.addEventListener("click", async (event) => {
   const item = event.target.closest("[data-project]");
   if (!item) return;
   state.currentProjectId = Number(item.dataset.project);
+  state.route = null;
   renderProjects();
   fillProjectForm(currentProject());
   renderProfileSummary();
@@ -285,7 +398,7 @@ document.querySelector("#run-search").addEventListener("click", async () => {
     if (result.errors?.length) {
       setStatus(`完成 ${result.fetched_count} 张素材卡，部分失败：${result.errors.join("；")}`);
     } else {
-      setStatus(`搜索完成：${result.fetched_count} 张素材卡`);
+      setStatus(`搜索完成：保留 ${result.relevant_count} 张，折叠 ${result.filtered_count} 张低相关素材`);
     }
   } catch (error) {
     setStatus(`搜索失败：${error.message}`);
@@ -293,6 +406,71 @@ document.querySelector("#run-search").addEventListener("click", async () => {
 });
 
 document.querySelector("#refresh-projects").addEventListener("click", loadProjects);
+
+document.querySelector("#show-irrelevant").addEventListener("change", (event) => {
+  state.showIrrelevant = event.target.checked;
+  renderBoard();
+});
+
+document.querySelector("#toggle-basket").addEventListener("click", () => {
+  basketPanelEl.hidden = !basketPanelEl.hidden;
+});
+
+document.querySelector("#close-basket").addEventListener("click", () => {
+  basketPanelEl.hidden = true;
+});
+
+document.querySelector("#generate-route").addEventListener("click", async () => {
+  const selected = state.materials.filter((material) => Boolean(material.in_basket));
+  if (selected.length === 0) {
+    setStatus("请先把素材加入方案篮子");
+    return;
+  }
+  try {
+    setStatus("正在整理第一轮实验路线...");
+    state.route = await api(`/api/basket/route?topic_id=${state.currentProjectId}`);
+    renderRoute();
+    setStatus(`实验路线已生成，共 ${state.route.steps.length} 个接入步骤`);
+  } catch (error) {
+    setStatus(`生成失败：${error.message}`);
+  }
+});
+
+boardEl.addEventListener("click", async (event) => {
+  const button = event.target.closest("[data-action]");
+  if (!button) return;
+  const card = button.closest("[data-material-id]");
+  const material = state.materials.find((item) => item.id === Number(card?.dataset.materialId));
+  if (!material) return;
+  try {
+    if (button.dataset.action === "feedback") {
+      const value = material.user_feedback === button.dataset.value ? "" : button.dataset.value;
+      await updateMaterial(material, { user_feedback: value });
+      setStatus(value === "irrelevant" ? "已标记为不相关并折叠" : "素材反馈已记录");
+    } else if (button.dataset.action === "read") {
+      await updateMaterial(material, { is_read: !Boolean(material.is_read) });
+      setStatus("阅读状态已更新");
+    } else if (button.dataset.action === "basket") {
+      await updateMaterial(material, { in_basket: !Boolean(material.in_basket) });
+      setStatus(material.in_basket ? "已移出方案篮子" : "已加入方案篮子");
+    }
+  } catch (error) {
+    setStatus(`操作失败：${error.message}`);
+  }
+});
+
+basketItemsEl.addEventListener("click", async (event) => {
+  const button = event.target.closest("[data-remove-basket]");
+  if (!button) return;
+  const material = state.materials.find((item) => item.id === Number(button.dataset.removeBasket));
+  if (!material) return;
+  try {
+    await updateMaterial(material, { in_basket: false });
+    setStatus("已移出方案篮子");
+  } catch (error) {
+    setStatus(`操作失败：${error.message}`);
+  }
+});
 
 async function boot() {
   try {

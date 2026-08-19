@@ -6,6 +6,7 @@ import mimetypes
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
 
 from auto_paper.arxiv_client import search_arxiv
@@ -14,6 +15,7 @@ from auto_paper.database import Database
 from auto_paper.exporter import papers_to_csv, papers_to_markdown
 from auto_paper.materializer import build_material_card, build_project_query
 from auto_paper.recommender import score_paper
+from auto_paper.route_builder import build_experiment_route
 from auto_paper.scheduler import DailyScheduler
 from auto_paper.summarizer import summarize_paper
 
@@ -34,10 +36,19 @@ class AutoPaperApp:
             topics = [topic for topic in topics if topic["id"] == topic_id]
 
         total = 0
+        relevant_total = 0
         errors: list[str] = []
         for topic in topics:
             try:
-                query = topic["query"] or build_project_query(topic)
+                has_profile = any(topic.get(field) for field in ["domain", "task_type", "idea", "keywords"])
+                query = build_project_query(topic) if has_profile else topic["query"]
+                for existing in self.db.list_papers(topic_id=topic["id"], limit=500):
+                    material = build_material_card(
+                        SimpleNamespace(title=existing["title"], abstract=existing["abstract"]),
+                        topic,
+                        existing["summary"],
+                    )
+                    self.db.update_paper_analysis(existing["id"], material)
                 papers = search_arxiv(query, topic["max_results"])
                 for candidate in papers:
                     summary = summarize_paper(candidate.title, candidate.abstract, query)
@@ -72,8 +83,11 @@ class AutoPaperApp:
                             "code_availability_score": material["code_availability_score"],
                             "evidence_sources": material["evidence_sources"],
                             "evidence_quote": material["evidence_quote"],
+                            "is_relevant": material["is_relevant"],
+                            "filter_reason": material["filter_reason"],
                         }
                     )
+                    relevant_total += int(material["is_relevant"])
                 total += len(papers)
                 self.db.record_run(topic["id"], "success", "ok", len(papers))
             except Exception as exc:  # noqa: BLE001 - API failures should be captured in MVP runs.
@@ -82,7 +96,13 @@ class AutoPaperApp:
                 self.db.record_run(topic["id"], "failed", message, 0)
 
         status = "partial" if errors else "success"
-        return {"status": status, "fetched_count": total, "errors": errors}
+        return {
+            "status": status,
+            "fetched_count": total,
+            "relevant_count": relevant_total,
+            "filtered_count": total - relevant_total,
+            "errors": errors,
+        }
 
 
 def create_handler(app: AutoPaperApp) -> type[BaseHTTPRequestHandler]:
@@ -103,6 +123,22 @@ def create_handler(app: AutoPaperApp) -> type[BaseHTTPRequestHandler]:
                 return
             if route.path == "/api/runs":
                 self._json(app.db.list_runs())
+                return
+            if route.path == "/api/basket/route":
+                query = parse_qs(route.query)
+                topic_id = _optional_int(query.get("topic_id", [""])[0])
+                if not topic_id:
+                    self._json({"error": "missing topic_id"}, HTTPStatus.BAD_REQUEST)
+                    return
+                project = next(
+                    (item for item in app.db.list_topics() if item["id"] == topic_id),
+                    None,
+                )
+                if project is None:
+                    self._json({"error": "project not found"}, HTTPStatus.NOT_FOUND)
+                    return
+                materials = app.db.list_basket(topic_id)
+                self._json(build_experiment_route(project, materials))
                 return
             if route.path == "/api/export":
                 self._export(route.query)
@@ -172,6 +208,26 @@ def create_handler(app: AutoPaperApp) -> type[BaseHTTPRequestHandler]:
                     self._json(project)
                 except Exception as exc:  # noqa: BLE001
                     self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+                return
+            self._json({"error": "Not found"}, HTTPStatus.NOT_FOUND)
+
+        def do_PATCH(self) -> None:
+            route = urlparse(self.path)
+            if route.path == "/api/materials":
+                query = parse_qs(route.query)
+                paper_id = _optional_int(query.get("id", [""])[0])
+                if not paper_id:
+                    self._json({"error": "missing id"}, HTTPStatus.BAD_REQUEST)
+                    return
+                try:
+                    material = app.db.update_paper_state(paper_id, self._read_json())
+                except ValueError as exc:
+                    self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+                    return
+                if material is None:
+                    self._json({"error": "material not found"}, HTTPStatus.NOT_FOUND)
+                    return
+                self._json(material)
                 return
             self._json({"error": "Not found"}, HTTPStatus.NOT_FOUND)
 
