@@ -3,10 +3,12 @@ const state = {
   currentProjectId: null,
   materials: [],
   quality: null,
+  profileCheck: null,
   showIrrelevant: false,
   viewMode: "top",
   areaFilter: "all",
   route: null,
+  activeAnalysisPaperId: null,
 };
 
 const statusEl = document.querySelector("#status");
@@ -14,6 +16,7 @@ const projectsEl = document.querySelector("#projects");
 const boardEl = document.querySelector("#board");
 const metricsEl = document.querySelector("#board-metrics");
 const profileSummaryEl = document.querySelector("#profile-summary");
+const profileCheckEl = document.querySelector("#profile-check");
 const formEl = document.querySelector("#project-form");
 const basketPanelEl = document.querySelector("#basket-panel");
 const basketItemsEl = document.querySelector("#basket-items");
@@ -21,6 +24,9 @@ const basketCountEl = document.querySelector("#basket-count");
 const routeResultEl = document.querySelector("#route-result");
 const filterSummaryEl = document.querySelector("#filter-summary");
 const qualityMetricsEl = document.querySelector("#quality-metrics");
+const analysisDrawerEl = document.querySelector("#analysis-drawer");
+const analysisOverlayEl = document.querySelector("#analysis-overlay");
+const analysisContentEl = document.querySelector("#analysis-content");
 const AREAS = ["Backbone", "Neck", "Head", "Loss", "Data", "Training", "Experiment"];
 const AREA_LABELS = {
   Backbone: "骨干",
@@ -87,6 +93,16 @@ async function loadMaterials() {
   renderBoard();
 }
 
+async function loadProfileCheck() {
+  if (!state.currentProjectId) {
+    state.profileCheck = null;
+    renderProfileCheck();
+    return;
+  }
+  state.profileCheck = await api(`/api/profile-check?topic_id=${state.currentProjectId}`);
+  renderProfileCheck();
+}
+
 function updateProjectLinks() {
   const suffix = state.currentProjectId ? `&topic_id=${state.currentProjectId}` : "";
   document.querySelector("#export-markdown").href = `/api/export?format=markdown${suffix}`;
@@ -132,6 +148,38 @@ function renderProfileSummary() {
     <div class="profile-cell"><span>Backbone</span><strong>${escapeHtml(project.backbone || "-")}</strong></div>
     <div class="profile-cell"><span>Neck</span><strong>${escapeHtml(project.neck || "-")}</strong></div>
     <div class="profile-cell"><span>Dataset</span><strong>${escapeHtml(project.dataset || "-")}</strong></div>
+  `;
+}
+
+function renderProfileCheck() {
+  const check = state.profileCheck;
+  if (!check) {
+    profileCheckEl.innerHTML = "";
+    return;
+  }
+  const labels = {
+    ready: "画像一致",
+    warning: "需要确认",
+    blocked: "信息不足",
+  };
+  const importantIssues = (check.issues || []).filter((issue) => issue.severity !== "info");
+  const visibleIssues = importantIssues.length ? importantIssues : (check.issues || []).slice(0, 2);
+  profileCheckEl.className = `profile-check profile-check-${check.status}`;
+  profileCheckEl.innerHTML = `
+    <div class="profile-check-score">
+      <span>${escapeHtml(labels[check.status] || "画像检查")}</span>
+      <strong>${Number(check.readiness_score || 0)}</strong>
+    </div>
+    <div class="profile-check-body">
+      <strong>${escapeHtml(check.summary)}</strong>
+      ${visibleIssues.length ? `
+        <div class="profile-issues">
+          ${visibleIssues.map((issue) => `
+            <p><b>${escapeHtml(issue.message)}</b><span>${escapeHtml(issue.suggestion)}</span></p>
+          `).join("")}
+        </div>
+      ` : '<p>任务、idea 与模型结构描述目前没有发现明显冲突。</p>'}
+    </div>
   `;
 }
 
@@ -234,6 +282,7 @@ function renderMaterialCard(paper) {
   const rankingScore = Number(paper.ranking_score || paper.stitchability_score || 0);
   const feedback = paper.user_feedback || "";
   const tier = paper.relevance_tier || "reference";
+  const hasAnalysis = Boolean(paper.deep_analysis_json);
   const tierLabels = {
     direct: "直接相关",
     transferable: "可迁移",
@@ -247,6 +296,7 @@ function renderMaterialCard(paper) {
           <span>${escapeHtml(paper.material_type)}</span>
           <span class="tier-flag tier-${escapeHtml(tier)}">${escapeHtml(tierLabels[tier] || "待判断")}</span>
           ${paper.is_read ? '<span class="read-flag">已读</span>' : ""}
+          ${hasAnalysis ? '<span class="analysis-flag">已分析</span>' : ""}
         </div>
         <strong title="反馈重排分">${rankingScore.toFixed(1)}</strong>
       </div>
@@ -277,6 +327,7 @@ function renderMaterialCard(paper) {
         <a href="${escapeHtml(paper.pdf_url)}" target="_blank" rel="noreferrer">PDF</a>
       </div>
       <div class="card-actions">
+        <button class="compact analysis-button" data-action="analyze" type="button">${hasAnalysis ? "查看分析" : "深度分析"}</button>
         <button class="compact ghost ${feedback === "useful" ? "active" : ""}" data-action="feedback" data-value="useful" type="button">有用</button>
         <button class="compact ghost ${feedback === "stitchable" ? "active" : ""}" data-action="feedback" data-value="stitchable" type="button">可缝合</button>
         <button class="compact ghost ${feedback === "irrelevant" ? "active danger" : ""}" data-action="feedback" data-value="irrelevant" type="button">不相关</button>
@@ -285,6 +336,98 @@ function renderMaterialCard(paper) {
       </div>
     </article>
   `;
+}
+
+function openAnalysisDrawer(material, result) {
+  const analysis = result.analysis;
+  if (!analysis) return;
+  state.activeAnalysisPaperId = material.id;
+  const sourceLabels = {
+    openai: "OpenAI 结构化分析",
+    rules: "规则分析",
+    rules_fallback: "规则降级分析",
+  };
+  document.querySelector("#analysis-title").textContent = material.title;
+  document.querySelector("#analysis-meta").textContent = `${sourceLabels[result.source] || "深度分析"} · ${result.model || "未知模型"}${result.cache_hit ? " · 已命中缓存" : ""}`;
+  analysisContentEl.innerHTML = `
+    ${result.warning ? `<div class="analysis-warning">${escapeHtml(result.warning)}</div>` : ""}
+    <section class="analysis-lead">
+      <span class="analysis-area">${escapeHtml(analysis.integration_area)}</span>
+      <strong>${escapeHtml(analysis.reusable_module)}</strong>
+      <p>${escapeHtml(analysis.project_match)}</p>
+    </section>
+    <section class="analysis-section">
+      <h4>问题与方法</h4>
+      <dl class="analysis-definition">
+        <div><dt>核心问题</dt><dd>${escapeHtml(analysis.core_problem)}</dd></div>
+        <div><dt>方法摘要</dt><dd>${escapeHtml(analysis.method_summary)}</dd></div>
+        <div><dt>预期收益</dt><dd>${escapeHtml(analysis.expected_gain)}</dd></div>
+      </dl>
+    </section>
+    <section class="analysis-section">
+      <h4>接入接口</h4>
+      <div class="interface-grid">
+        ${renderAnalysisList("输入", analysis.integration_interface?.inputs)}
+        ${renderAnalysisList("输出", analysis.integration_interface?.outputs)}
+        ${renderAnalysisList("代码改动", analysis.integration_interface?.code_changes)}
+      </div>
+    </section>
+    <section class="analysis-section">
+      <h4>最小实现</h4>
+      <ol class="analysis-steps">
+        ${(analysis.minimal_implementation || []).map((item) => `<li>${escapeHtml(item)}</li>`).join("")}
+      </ol>
+    </section>
+    <section class="analysis-section">
+      <h4>实验计划</h4>
+      <div class="experiment-list">
+        ${(analysis.experiment_plan || []).map((experiment) => `
+          <article>
+            <strong>${escapeHtml(experiment.name)}</strong>
+            <p>${escapeHtml(experiment.change)}</p>
+            <span>对照：${escapeHtml(experiment.control)}</span>
+            <small>${(experiment.metrics || []).map(escapeHtml).join(" · ")}</small>
+          </article>
+        `).join("")}
+      </div>
+    </section>
+    <section class="analysis-section analysis-two-column">
+      ${renderAnalysisList("风险", analysis.risks)}
+      ${renderAnalysisList("证据", analysis.evidence)}
+    </section>
+    <footer class="analysis-footer">
+      <strong>置信度 ${Number(analysis.confidence || 0)}/100</strong>
+      <p>${escapeHtml(analysis.limitations)}</p>
+    </footer>
+  `;
+  analysisDrawerEl.hidden = false;
+  analysisOverlayEl.hidden = false;
+  document.body.classList.add("drawer-open");
+}
+
+function renderAnalysisList(title, items = []) {
+  return `
+    <div class="analysis-list">
+      <strong>${escapeHtml(title)}</strong>
+      ${(items || []).map((item) => `<p>${escapeHtml(item)}</p>`).join("") || "<p>-</p>"}
+    </div>
+  `;
+}
+
+function closeAnalysisDrawer() {
+  analysisDrawerEl.hidden = true;
+  analysisOverlayEl.hidden = true;
+  document.body.classList.remove("drawer-open");
+}
+
+async function analyzeMaterial(material, force = false) {
+  setStatus(force ? "正在重新分析论文素材..." : "正在生成深度缝合分析...");
+  const result = await api(`/api/analyze?paper_id=${material.id}${force ? "&force=1" : ""}`, {
+    method: "POST",
+  });
+  openAnalysisDrawer(material, result);
+  await loadMaterials();
+  setStatus(result.warning || `${result.cache_hit ? "已打开" : "已生成"} ${result.source === "openai" ? "OpenAI" : "规则"}深度分析`);
 }
 
 function isRelevant(material) {
@@ -415,6 +558,7 @@ formEl.addEventListener("submit", async (event) => {
       : await api("/api/projects", { method: "POST", body: JSON.stringify(payload) });
     state.currentProjectId = saved.id;
     await loadProjects();
+    await Promise.all([loadProfileCheck(), loadMaterials()]);
     setStatus("项目画像已保存");
   } catch (error) {
     setStatus(`保存失败：${error.message}`);
@@ -430,7 +574,7 @@ projectsEl.addEventListener("click", async (event) => {
   fillProjectForm(currentProject());
   renderProfileSummary();
   try {
-    await loadMaterials();
+    await Promise.all([loadProfileCheck(), loadMaterials()]);
     setStatus("已切换项目");
   } catch (error) {
     setStatus(`切换失败：${error.message}`);
@@ -455,6 +599,23 @@ document.querySelector("#run-search").addEventListener("click", async () => {
     }
   } catch (error) {
     setStatus(`搜索失败：${error.message}`);
+  }
+});
+
+document.querySelector("#analyze-top").addEventListener("click", async () => {
+  if (!state.currentProjectId) {
+    setStatus("请先保存项目画像");
+    return;
+  }
+  try {
+    setStatus("正在分析 Top 10 素材...");
+    const result = await api(`/api/analyze/top?topic_id=${state.currentProjectId}`, { method: "POST" });
+    state.profileCheck = result.profile_check;
+    renderProfileCheck();
+    await loadMaterials();
+    setStatus(`Top 10 已分析 ${result.analyzed_count} 张，其中 ${result.cached_count} 张命中缓存`);
+  } catch (error) {
+    setStatus(`批量分析失败：${error.message}`);
   }
 });
 
@@ -521,9 +682,27 @@ boardEl.addEventListener("click", async (event) => {
     } else if (button.dataset.action === "basket") {
       await updateMaterial(material, { in_basket: !Boolean(material.in_basket) });
       setStatus(material.in_basket ? "已移出方案篮子" : "已加入方案篮子");
+    } else if (button.dataset.action === "analyze") {
+      await analyzeMaterial(material);
     }
   } catch (error) {
     setStatus(`操作失败：${error.message}`);
+  }
+});
+
+document.querySelector("#close-analysis").addEventListener("click", closeAnalysisDrawer);
+analysisOverlayEl.addEventListener("click", closeAnalysisDrawer);
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !analysisDrawerEl.hidden) closeAnalysisDrawer();
+});
+
+document.querySelector("#refresh-analysis").addEventListener("click", async () => {
+  const material = state.materials.find((item) => item.id === state.activeAnalysisPaperId);
+  if (!material) return;
+  try {
+    await analyzeMaterial(material, true);
+  } catch (error) {
+    setStatus(`重新分析失败：${error.message}`);
   }
 });
 
@@ -543,7 +722,7 @@ basketItemsEl.addEventListener("click", async (event) => {
 async function boot() {
   try {
     await loadProjects();
-    await loadMaterials();
+    await Promise.all([loadProfileCheck(), loadMaterials()]);
     setStatus("准备就绪");
   } catch (error) {
     setStatus(`加载失败：${error.message}`);

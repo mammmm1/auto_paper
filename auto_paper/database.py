@@ -90,6 +90,11 @@ class Database:
             self._ensure_column(conn, "papers", "user_feedback", "TEXT NOT NULL DEFAULT ''")
             self._ensure_column(conn, "papers", "is_read", "INTEGER NOT NULL DEFAULT 0")
             self._ensure_column(conn, "papers", "in_basket", "INTEGER NOT NULL DEFAULT 0")
+            self._ensure_column(conn, "papers", "deep_analysis_json", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(conn, "papers", "deep_analysis_source", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(conn, "papers", "deep_analysis_model", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(conn, "papers", "deep_analysis_input_hash", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(conn, "papers", "deep_analysis_updated_at", "TEXT NOT NULL DEFAULT ''")
 
     def _ensure_column(self, conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
         columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
@@ -243,6 +248,28 @@ class Database:
         params = list(updates.values()) + [topic_id]
         with self.connect() as conn:
             conn.execute(f"UPDATE topics SET {assignments} WHERE id = ?", params)
+            analysis_fields = {
+                "name",
+                "domain",
+                "task_type",
+                "idea",
+                "keywords",
+                "backbone",
+                "neck",
+                "head",
+                "dataset",
+            }
+            if analysis_fields.intersection(updates):
+                conn.execute(
+                    """
+                    UPDATE papers
+                    SET deep_analysis_json = '', deep_analysis_source = '',
+                        deep_analysis_model = '', deep_analysis_input_hash = '',
+                        deep_analysis_updated_at = ''
+                    WHERE topic_id = ?
+                    """,
+                    (topic_id,),
+                )
             row = conn.execute("SELECT * FROM topics WHERE id = ?", (topic_id,)).fetchone()
             return dict(row)
 
@@ -315,6 +342,19 @@ class Database:
         with self.connect() as conn:
             return [dict(row) for row in conn.execute(sql, params).fetchall()]
 
+    def get_paper(self, paper_id: int) -> dict[str, Any] | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT papers.*, topics.name AS topic_name
+                FROM papers
+                JOIN topics ON topics.id = papers.topic_id
+                WHERE papers.id = ?
+                """,
+                (paper_id,),
+            ).fetchone()
+            return dict(row) if row is not None else None
+
     def update_paper_state(self, paper_id: int, fields: dict[str, Any]) -> dict[str, Any] | None:
         allowed = {"user_feedback", "is_read", "in_basket"}
         updates = {key: value for key, value in fields.items() if key in allowed}
@@ -365,6 +405,26 @@ class Database:
             conn.execute(
                 f"UPDATE papers SET {assignments} WHERE id = ?",
                 [*values, paper_id],
+            )
+
+    def save_deep_analysis(
+        self,
+        paper_id: int,
+        analysis_json: str,
+        source: str,
+        model: str,
+        input_hash: str,
+    ) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                UPDATE papers
+                SET deep_analysis_json = ?, deep_analysis_source = ?,
+                    deep_analysis_model = ?, deep_analysis_input_hash = ?,
+                    deep_analysis_updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (analysis_json, source, model, input_hash, paper_id),
             )
 
     def list_basket(self, topic_id: int) -> list[dict[str, Any]]:

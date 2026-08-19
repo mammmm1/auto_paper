@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import mimetypes
+from dataclasses import replace
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -12,11 +13,13 @@ from urllib.parse import parse_qs, urlparse
 from auto_paper.arxiv_client import search_arxiv
 from auto_paper.config import Settings, load_settings
 from auto_paper.database import Database
+from auto_paper.deep_analyzer import analysis_engine, analysis_input_hash, analyze_material
 from auto_paper.exporter import papers_to_csv, papers_to_markdown
 from auto_paper.materializer import build_material_card, build_project_query
 from auto_paper.quality import build_quality_metrics, rank_materials
 from auto_paper.recommender import score_paper
 from auto_paper.route_builder import build_experiment_route
+from auto_paper.profile_validator import validate_project_profile
 from auto_paper.scheduler import DailyScheduler
 from auto_paper.summarizer import summarize_paper
 
@@ -38,6 +41,97 @@ class AutoPaperApp:
     def quality_metrics(self, topic_id: int) -> dict:
         papers = self.db.list_papers(topic_id=topic_id, limit=500)
         return build_quality_metrics(papers)
+
+    def project(self, topic_id: int) -> dict | None:
+        return next((item for item in self.db.list_topics() if item["id"] == topic_id), None)
+
+    def profile_check(self, topic_id: int) -> dict | None:
+        project = self.project(topic_id)
+        return validate_project_profile(project) if project else None
+
+    def cached_deep_analysis(self, paper_id: int) -> dict | None:
+        paper = self.db.get_paper(paper_id)
+        if paper is None:
+            return None
+        project = self.project(int(paper["topic_id"]))
+        if project is None:
+            return None
+        engine = analysis_engine(self.settings.openai_api_key, self.settings.openai_model)
+        expected_hash = analysis_input_hash(paper, project, engine)
+        raw = str(paper.get("deep_analysis_json") or "")
+        is_current = bool(raw) and paper.get("deep_analysis_input_hash") == expected_hash
+        if not is_current:
+            return {
+                "paper_id": paper_id,
+                "analysis": None,
+                "cache_hit": False,
+                "stale": bool(raw),
+            }
+        try:
+            analysis = json.loads(raw)
+        except json.JSONDecodeError:
+            analysis = None
+        return {
+            "paper_id": paper_id,
+            "analysis": analysis,
+            "source": paper.get("deep_analysis_source") or "",
+            "model": paper.get("deep_analysis_model") or "",
+            "updated_at": paper.get("deep_analysis_updated_at") or "",
+            "cache_hit": analysis is not None,
+            "stale": False,
+            "warning": "",
+        }
+
+    def analyze_paper(self, paper_id: int, force: bool = False) -> dict | None:
+        if not force:
+            cached = self.cached_deep_analysis(paper_id)
+            if cached and cached.get("analysis"):
+                return cached
+        paper = self.db.get_paper(paper_id)
+        if paper is None:
+            return None
+        project = self.project(int(paper["topic_id"]))
+        if project is None:
+            return None
+        result = analyze_material(
+            paper,
+            project,
+            api_key=self.settings.openai_api_key,
+            model=self.settings.openai_model,
+        )
+        self.db.save_deep_analysis(
+            paper_id,
+            json.dumps(result["analysis"], ensure_ascii=False),
+            result["source"],
+            result["model"],
+            result["input_hash"],
+        )
+        return {
+            "paper_id": paper_id,
+            "analysis": result["analysis"],
+            "source": result["source"],
+            "model": result["model"],
+            "updated_at": self.db.get_paper(paper_id).get("deep_analysis_updated_at", ""),
+            "cache_hit": False,
+            "stale": False,
+            "warning": result.get("warning", ""),
+        }
+
+    def analyze_top(self, topic_id: int, force: bool = False, limit: int = 10) -> dict:
+        metrics = self.quality_metrics(topic_id)
+        paper_ids = metrics.get("top_material_ids", [])[: max(1, min(limit, 10))]
+        results = []
+        for paper_id in paper_ids:
+            result = self.analyze_paper(int(paper_id), force=force)
+            if result:
+                results.append(result)
+        return {
+            "topic_id": topic_id,
+            "analyzed_count": len(results),
+            "cached_count": sum(1 for item in results if item.get("cache_hit")),
+            "profile_check": self.profile_check(topic_id),
+            "results": results,
+        }
 
     def run_topics(self, topic_id: int | None = None) -> dict:
         topics = self.db.list_topics(enabled_only=True)
@@ -143,6 +237,30 @@ def create_handler(app: AutoPaperApp) -> type[BaseHTTPRequestHandler]:
                     return
                 self._json(app.quality_metrics(topic_id))
                 return
+            if route.path == "/api/profile-check":
+                query = parse_qs(route.query)
+                topic_id = _optional_int(query.get("topic_id", [""])[0])
+                if not topic_id:
+                    self._json({"error": "missing topic_id"}, HTTPStatus.BAD_REQUEST)
+                    return
+                result = app.profile_check(topic_id)
+                if result is None:
+                    self._json({"error": "project not found"}, HTTPStatus.NOT_FOUND)
+                    return
+                self._json(result)
+                return
+            if route.path == "/api/deep-analysis":
+                query = parse_qs(route.query)
+                paper_id = _optional_int(query.get("paper_id", [""])[0])
+                if not paper_id:
+                    self._json({"error": "missing paper_id"}, HTTPStatus.BAD_REQUEST)
+                    return
+                result = app.cached_deep_analysis(paper_id)
+                if result is None:
+                    self._json({"error": "material not found"}, HTTPStatus.NOT_FOUND)
+                    return
+                self._json(result)
+                return
             if route.path == "/api/runs":
                 self._json(app.db.list_runs())
                 return
@@ -211,6 +329,31 @@ def create_handler(app: AutoPaperApp) -> type[BaseHTTPRequestHandler]:
                 topic_id = _optional_int(query.get("topic_id", [""])[0])
                 result = app.run_topics(topic_id)
                 self._json(result)
+                return
+            if route.path == "/api/analyze":
+                query = parse_qs(route.query)
+                paper_id = _optional_int(query.get("paper_id", [""])[0])
+                force = query.get("force", ["0"])[0] == "1"
+                if not paper_id:
+                    self._json({"error": "missing paper_id"}, HTTPStatus.BAD_REQUEST)
+                    return
+                result = app.analyze_paper(paper_id, force=force)
+                if result is None:
+                    self._json({"error": "material not found"}, HTTPStatus.NOT_FOUND)
+                    return
+                self._json(result)
+                return
+            if route.path == "/api/analyze/top":
+                query = parse_qs(route.query)
+                topic_id = _optional_int(query.get("topic_id", [""])[0])
+                force = query.get("force", ["0"])[0] == "1"
+                if not topic_id:
+                    self._json({"error": "missing topic_id"}, HTTPStatus.BAD_REQUEST)
+                    return
+                if app.project(topic_id) is None:
+                    self._json({"error": "project not found"}, HTTPStatus.NOT_FOUND)
+                    return
+                self._json(app.analyze_top(topic_id, force=force))
                 return
             self._json({"error": "Not found"}, HTTPStatus.NOT_FOUND)
 
@@ -337,9 +480,9 @@ def main() -> None:
 
     settings = load_settings()
     if args.host:
-        settings = Settings(args.host, settings.port, settings.database_path, settings.daily_hour)
+        settings = replace(settings, host=args.host)
     if args.port:
-        settings = Settings(settings.host, args.port, settings.database_path, settings.daily_hour)
+        settings = replace(settings, port=args.port)
 
     app = AutoPaperApp(settings)
     if args.run_once:

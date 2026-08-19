@@ -4,6 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Auto Paper</title>
+    <link rel="icon" href="data:," />
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
@@ -82,6 +83,7 @@
         </div>
         <div class="actions">
           <button id="run-search" type="button">搜索可缝合素材</button>
+          <button id="analyze-top" class="secondary" type="button">分析 Top 10</button>
           <button id="toggle-basket" class="secondary" type="button">方案篮子 <span id="basket-count">0</span></button>
           <a id="export-markdown" class="button secondary" href="/api/export?format=markdown">下载 Markdown</a>
           <a id="export-csv" class="button secondary" href="/api/export?format=csv">下载 CSV</a>
@@ -93,6 +95,7 @@
         <section id="board-metrics" class="board-metrics"></section>
       </div>
       <section id="profile-summary" class="profile-summary"></section>
+      <section id="profile-check" class="profile-check"></section>
       <section class="quality-panel">
         <div class="quality-title">
           <span class="summary-label">Quality Loop</span>
@@ -141,6 +144,22 @@
       </section>
       <section id="board" class="material-board"></section>
     </main>
+
+    <div id="analysis-overlay" class="analysis-overlay" hidden></div>
+    <aside id="analysis-drawer" class="analysis-drawer" hidden aria-label="论文深度缝合分析">
+      <header class="analysis-header">
+        <div>
+          <span class="summary-label">Deep Stitch Analysis</span>
+          <h3 id="analysis-title">深度缝合分析</h3>
+          <p id="analysis-meta"></p>
+        </div>
+        <div class="analysis-header-actions">
+          <button id="refresh-analysis" class="secondary" type="button">重新分析</button>
+          <button id="close-analysis" class="icon-button ghost" type="button" title="关闭分析" aria-label="关闭分析">×</button>
+        </div>
+      </header>
+      <div id="analysis-content" class="analysis-content"></div>
+    </aside>
 
     <script src="/app.js"></script>
   </body>

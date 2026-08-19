@@ -1,6 +1,13 @@
+import json
 import unittest
 
+from auto_paper.deep_analyzer import (
+    analysis_input_hash,
+    build_rule_analysis,
+    extract_response_text,
+)
 from auto_paper.materializer import build_material_card, build_project_query
+from auto_paper.profile_validator import validate_project_profile
 from auto_paper.quality import build_quality_metrics, rank_materials
 from auto_paper.recommender import score_paper
 from auto_paper.route_builder import build_experiment_route
@@ -221,6 +228,122 @@ class RouteBuilderTests(unittest.TestCase):
         self.assertEqual(route["steps"][0]["area"], "Backbone")
         self.assertEqual(route["steps"][1]["area"], "Loss")
         self.assertIn("Swin", route["baseline"])
+
+    def test_route_prefers_cached_deep_analysis_action(self):
+        analysis = {
+            "integration_area": "Neck",
+            "minimal_implementation": ["冻结基线", "接入尺度路由模块"],
+            "risks": ["特征通道可能不匹配"],
+        }
+        route = build_experiment_route(
+            {"name": "遥感检测", "idea": "分层尺度偏向"},
+            [
+                {
+                    "title": "Scale router",
+                    "integration_area": "Neck",
+                    "stitch_action": "旧动作",
+                    "stitch_difficulty": "中",
+                    "stitchability_score": 80,
+                    "code_availability_score": 60,
+                    "deep_analysis_json": json.dumps(analysis, ensure_ascii=False),
+                    "deep_analysis_source": "rules",
+                }
+            ],
+        )
+
+        self.assertEqual(route["steps"][0]["action"], "接入尺度路由模块")
+        self.assertIn("特征通道可能不匹配", route["risks"])
+
+
+class ProfileValidatorTests(unittest.TestCase):
+    def test_detects_segmentation_and_detection_profile_conflict(self):
+        result = validate_project_profile(
+            {
+                "name": "遥感工作台",
+                "domain": "遥感图像",
+                "task_type": "语义分割",
+                "idea": "增强遥感小目标检测",
+                "keywords": "remote sensing, object detection",
+                "backbone": "Swin Transformer",
+                "neck": "FPN",
+                "head": "Detection Head",
+                "dataset": "DOTA",
+            }
+        )
+
+        self.assertEqual(result["status"], "warning")
+        self.assertIn("task_idea_mismatch", [item["code"] for item in result["issues"]])
+
+    def test_consistent_profile_is_ready(self):
+        result = validate_project_profile(
+            {
+                "name": "遥感检测",
+                "domain": "遥感图像",
+                "task_type": "目标检测",
+                "idea": "通过多尺度特征增强小目标检测",
+                "keywords": "remote sensing, object detection",
+                "backbone": "Swin Transformer",
+                "neck": "FPN",
+                "head": "Detection Head",
+                "dataset": "DOTA",
+            }
+        )
+
+        self.assertEqual(result["status"], "ready")
+        self.assertEqual(result["readiness_score"], 100)
+
+
+class DeepAnalyzerTests(unittest.TestCase):
+    def setUp(self):
+        self.project = {
+            "name": "遥感检测",
+            "domain": "遥感图像",
+            "task_type": "目标检测",
+            "idea": "分层尺度偏向",
+            "keywords": "small object, multi-scale",
+            "backbone": "Swin Transformer",
+            "neck": "FPN",
+            "head": "Detection Head",
+            "dataset": "DOTA",
+        }
+        self.paper = {
+            "title": "Scale-aware feature fusion for remote sensing detection",
+            "abstract": "We propose a scale-aware fusion module for small object detection in aerial images. " * 5,
+            "summary": "该工作通过尺度感知融合增强小目标特征。",
+            "material_type": "module",
+            "integration_area": "Neck",
+            "integration_subtag": "Feature Fusion",
+            "stitch_action": "在 FPN 中增加尺度路由分支。",
+            "evidence_quote": "scale-aware fusion module for small object detection",
+        }
+
+    def test_rule_analysis_returns_executable_structure(self):
+        analysis = build_rule_analysis(self.paper, self.project)
+
+        self.assertEqual(analysis["integration_area"], "Neck")
+        self.assertGreaterEqual(len(analysis["minimal_implementation"]), 3)
+        self.assertEqual(len(analysis["experiment_plan"]), 3)
+        self.assertIn("mAP", analysis["experiment_plan"][0]["metrics"])
+        self.assertIn("尚未核验", analysis["limitations"])
+
+    def test_cache_hash_changes_with_project_idea(self):
+        first = analysis_input_hash(self.paper, self.project, "rules-v1")
+        changed = {**self.project, "idea": "另一条研究假设"}
+        second = analysis_input_hash(self.paper, changed, "rules-v1")
+
+        self.assertNotEqual(first, second)
+
+    def test_extracts_structured_response_text(self):
+        response = {
+            "output": [
+                {
+                    "type": "message",
+                    "content": [{"type": "output_text", "text": '{"ok": true}'}],
+                }
+            ]
+        }
+
+        self.assertEqual(extract_response_text(response), '{"ok": true}')
 
 
 if __name__ == "__main__":

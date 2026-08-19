@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 
@@ -32,17 +33,26 @@ def build_experiment_route(project: dict[str, Any], materials: list[dict[str, An
         if value
     ) or "当前项目基线"
 
-    steps = [
-        {
-            "order": index,
-            "area": material.get("integration_area") or "Experiment",
-            "title": material.get("title") or "未命名素材",
-            "action": material.get("stitch_action") or "人工确认接入位置后进行单变量实验。",
-            "difficulty": material.get("stitch_difficulty") or "中",
-            "score": float(material.get("stitchability_score") or 0),
-        }
-        for index, material in enumerate(selected, start=1)
-    ]
+    steps = []
+    for index, material in enumerate(selected, start=1):
+        deep_analysis = _deep_analysis(material)
+        minimal_steps = deep_analysis.get("minimal_implementation") or []
+        action = (
+            minimal_steps[1]
+            if len(minimal_steps) > 1
+            else (minimal_steps[0] if minimal_steps else material.get("stitch_action"))
+        )
+        steps.append(
+            {
+                "order": index,
+                "area": deep_analysis.get("integration_area") or material.get("integration_area") or "Experiment",
+                "title": material.get("title") or "未命名素材",
+                "action": action or "人工确认接入位置后进行单变量实验。",
+                "difficulty": material.get("stitch_difficulty") or "中",
+                "score": float(material.get("stitchability_score") or 0),
+                "analysis_source": material.get("deep_analysis_source") or "material_card",
+            }
+        )
     areas = list(dict.fromkeys(str(item["area"]) for item in steps))
     area_text = "、".join(areas) if areas else "待选择"
 
@@ -69,6 +79,11 @@ def build_experiment_route(project: dict[str, Any], materials: list[dict[str, An
 
 def _route_risks(materials: list[dict[str, Any]]) -> list[str]:
     risks: list[str] = []
+    for material in materials:
+        deep_risks = _deep_analysis(material).get("risks") or []
+        for risk in deep_risks[:1]:
+            if risk not in risks:
+                risks.append(str(risk))
     if any(item.get("stitch_difficulty") == "高" for item in materials):
         risks.append("包含高改造成本素材，建议放到低侵入实验验证之后。")
     if len(materials) > 5:
@@ -77,4 +92,15 @@ def _route_risks(materials: list[dict[str, Any]]) -> list[str]:
         risks.append("所选素材缺少明确代码线索，需要预留复现与接口适配时间。")
     if not risks:
         risks.append("当前组合风险可控，但仍需先做单变量实验再合并。")
-    return risks
+    return risks[:6]
+
+
+def _deep_analysis(material: dict[str, Any]) -> dict[str, Any]:
+    raw = material.get("deep_analysis_json")
+    if not raw:
+        return {}
+    try:
+        value = json.loads(str(raw))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {}
+    return value if isinstance(value, dict) else {}
