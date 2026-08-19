@@ -12,18 +12,153 @@
       <div class="brand">
         <span class="brand-mark">AP</span>
         <div>
-          <h1>Auto Paper</h1>
-          <p>可缝合科研素材工作台</p>
+          <strong>Auto Paper</strong>
+          <span>科研素材工作台</span>
         </div>
       </div>
 
+      <div class="sidebar-heading">
+        <span>研究项目</span>
+        <button id="new-project" class="text-button" type="button">新建</button>
+      </div>
+      <nav id="projects" class="project-list" aria-label="研究项目"></nav>
+
+      <div class="sidebar-footer">
+        <span>当前分支</span>
+        <strong>dev_ma</strong>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div class="page-title">
+          <span id="current-project-name">当前项目</span>
+          <h1>素材工作台</h1>
+        </div>
+        <div class="topbar-actions">
+          <button id="run-workflow" class="primary-button" type="button">运行完整流程</button>
+          <button id="toggle-basket" class="secondary-button" type="button">
+            方案篮子 <span id="basket-count" class="button-count">0</span>
+          </button>
+          <details id="more-actions" class="action-menu">
+            <summary>更多</summary>
+            <div class="action-menu-panel">
+              <button data-stage="search" type="button">仅搜索素材</button>
+              <button data-stage="evidence" type="button">仅核验全文</button>
+              <button data-stage="analysis" type="button">仅生成分析</button>
+              <hr />
+              <a id="export-markdown" href="/api/export?format=markdown">下载 Markdown</a>
+              <a id="export-csv" href="/api/export?format=csv">下载 CSV</a>
+            </div>
+          </details>
+        </div>
+      </header>
+
+      <section class="workflow-bar" aria-live="polite">
+        <div id="status" class="status">准备就绪</div>
+        <div id="workflow-steps" class="workflow-steps" aria-label="处理进度">
+          <span data-workflow-step="search"><b>1</b>检索</span>
+          <span data-workflow-step="evidence"><b>2</b>全文</span>
+          <span data-workflow-step="analysis"><b>3</b>分析</span>
+        </div>
+      </section>
+
+      <section class="project-band">
+        <div id="profile-summary" class="profile-summary"></div>
+        <div id="profile-check" class="profile-check"></div>
+        <button id="edit-project" class="secondary-button" type="button">编辑画像</button>
+      </section>
+
+      <section class="insight-band">
+        <div id="board-metrics" class="board-metrics"></div>
+        <div class="quality-summary">
+          <div>
+            <span>推荐质量</span>
+            <strong id="quality-status">等待反馈</strong>
+          </div>
+          <div class="quality-progress"><i id="quality-progress-bar"></i></div>
+          <div id="quality-metrics" class="quality-metrics"></div>
+        </div>
+      </section>
+
+      <section class="workbench">
+        <header class="workbench-header">
+          <div class="filter-controls">
+            <div id="view-modes" class="segmented-control" aria-label="素材视图">
+              <button class="active" data-view="top" type="button">Top 10</button>
+              <button data-view="all" type="button">全部有效</button>
+              <button data-view="code" type="button">有代码</button>
+              <button data-view="low" type="button">低成本</button>
+            </div>
+            <select id="area-filter" aria-label="按接入位置筛选">
+              <option value="all">全部位置</option>
+              <option value="Backbone">Backbone</option>
+              <option value="Neck">Neck</option>
+              <option value="Head">Head</option>
+              <option value="Loss">Loss</option>
+              <option value="Data">Data</option>
+              <option value="Training">Training</option>
+              <option value="Experiment">Experiment</option>
+            </select>
+            <label class="switch-control">
+              <input id="show-irrelevant" type="checkbox" />
+              <span>包含参考项</span>
+            </label>
+          </div>
+          <span id="filter-summary" class="filter-summary"></span>
+        </header>
+        <div id="board" class="material-board"></div>
+      </section>
+    </main>
+
+    <div id="basket-overlay" class="drawer-overlay" hidden></div>
+    <aside id="basket-panel" class="basket-panel" hidden aria-label="方案篮子">
+      <header class="drawer-header">
+        <div>
+          <span>Experiment Route</span>
+          <h2>方案篮子</h2>
+        </div>
+        <button id="close-basket" class="icon-button" type="button" title="关闭方案篮子" aria-label="关闭方案篮子">×</button>
+      </header>
+      <div class="basket-toolbar">
+        <span id="basket-summary">0 张素材</span>
+        <button id="generate-route" class="primary-button" type="button">生成实验路线</button>
+      </div>
+      <div id="basket-items" class="basket-items"></div>
+      <div id="route-result" class="route-result"></div>
+    </aside>
+
+    <div id="analysis-overlay" class="drawer-overlay" hidden></div>
+    <aside id="analysis-drawer" class="analysis-drawer" hidden aria-label="论文深度缝合分析">
+      <header class="drawer-header analysis-header">
+        <div>
+          <span>Deep Stitch Analysis</span>
+          <h2 id="analysis-title">深度缝合分析</h2>
+          <p id="analysis-meta"></p>
+        </div>
+        <div class="drawer-header-actions">
+          <button id="refresh-analysis" class="secondary-button" type="button">重新分析</button>
+          <button id="close-analysis" class="icon-button" type="button" title="关闭分析" aria-label="关闭分析">×</button>
+        </div>
+      </header>
+      <div id="analysis-content" class="analysis-content"></div>
+    </aside>
+
+    <dialog id="profile-dialog" class="profile-dialog">
       <form id="project-form" class="project-form">
-        <input name="id" type="hidden" />
-        <label>
-          项目名称
-          <input name="name" required placeholder="遥感 Transformer 分层偏向" />
-        </label>
-        <div class="field-grid">
+        <header class="dialog-header">
+          <div>
+            <span>Project Profile</span>
+            <h2 id="profile-dialog-title">编辑项目画像</h2>
+          </div>
+          <button id="close-profile" class="icon-button" type="button" title="关闭编辑" aria-label="关闭编辑">×</button>
+        </header>
+        <div class="form-body">
+          <input name="id" type="hidden" />
+          <label class="field-wide">
+            项目名称
+            <input name="name" required placeholder="遥感 Transformer 分层偏向" />
+          </label>
           <label>
             研究领域
             <input name="domain" placeholder="遥感图像" />
@@ -32,16 +167,14 @@
             任务类型
             <input name="task_type" placeholder="目标检测" />
           </label>
-        </div>
-        <label>
-          当前 idea
-          <textarea name="idea" required rows="4" placeholder="Transformer 浅层偏向小物体、深层偏向大物体..."></textarea>
-        </label>
-        <label>
-          关键词
-          <textarea name="keywords" rows="3" placeholder="remote sensing, transformer, small object, multi-scale feature"></textarea>
-        </label>
-        <div class="field-grid">
+          <label class="field-wide">
+            当前 idea
+            <textarea name="idea" required rows="4" placeholder="Transformer 浅层偏向小物体、深层偏向大物体..."></textarea>
+          </label>
+          <label class="field-wide">
+            关键词
+            <textarea name="keywords" rows="3" placeholder="remote sensing, transformer, small object"></textarea>
+          </label>
           <label>
             Backbone
             <input name="backbone" placeholder="Swin Transformer" />
@@ -58,109 +191,17 @@
             Dataset
             <input name="dataset" placeholder="DOTA / DIOR" />
           </label>
-        </div>
-        <label>
-          每次数量
-          <input name="max_results" type="number" min="1" max="50" value="20" />
-        </label>
-        <button type="submit">保存项目画像</button>
-      </form>
-
-      <section>
-        <div class="section-title">
-          <span>项目</span>
-          <button id="refresh-projects" class="ghost" type="button">刷新</button>
-        </div>
-        <div id="projects" class="project-list"></div>
-      </section>
-    </aside>
-
-    <main class="main">
-      <header class="toolbar">
-        <div>
-          <p class="eyebrow">Material Workbench</p>
-          <h2>可缝合素材看板</h2>
-        </div>
-        <div class="actions">
-          <button id="run-search" type="button">搜索可缝合素材</button>
-          <button id="verify-top" class="secondary" type="button">核验 Top 10</button>
-          <button id="analyze-top" class="secondary" type="button">分析 Top 10</button>
-          <button id="toggle-basket" class="secondary" type="button">方案篮子 <span id="basket-count">0</span></button>
-          <a id="export-markdown" class="button secondary" href="/api/export?format=markdown">下载 Markdown</a>
-          <a id="export-csv" class="button secondary" href="/api/export?format=csv">下载 CSV</a>
-        </div>
-      </header>
-
-      <div class="status-row">
-        <div id="status" class="status">准备就绪</div>
-        <section id="board-metrics" class="board-metrics"></section>
-      </div>
-      <section id="profile-summary" class="profile-summary"></section>
-      <section id="profile-check" class="profile-check"></section>
-      <section class="quality-panel">
-        <div class="quality-title">
-          <span class="summary-label">Quality Loop</span>
-          <strong>Top 10 推荐质量</strong>
-        </div>
-        <div id="quality-metrics" class="quality-metrics"></div>
-      </section>
-      <div class="workbench-controls">
-        <div class="filter-controls">
-          <div id="view-modes" class="segmented-control" aria-label="素材视图">
-            <button class="active" data-view="top" type="button">Top 10</button>
-            <button data-view="all" type="button">全部有效</button>
-            <button data-view="code" type="button">有代码</button>
-            <button data-view="low" type="button">低成本</button>
-          </div>
-          <select id="area-filter" aria-label="按接入位置筛选">
-            <option value="all">全部位置</option>
-            <option value="Backbone">Backbone</option>
-            <option value="Neck">Neck</option>
-            <option value="Head">Head</option>
-            <option value="Loss">Loss</option>
-            <option value="Data">Data</option>
-            <option value="Training">Training</option>
-            <option value="Experiment">Experiment</option>
-          </select>
-          <label class="switch-control">
-            <input id="show-irrelevant" type="checkbox" />
-            <span>显示参考/不相关</span>
+          <label>
+            每次搜索数量
+            <input name="max_results" type="number" min="1" max="50" value="20" />
           </label>
         </div>
-        <span id="filter-summary" class="filter-summary"></span>
-      </div>
-      <section id="basket-panel" class="basket-panel" hidden>
-        <header>
-          <div>
-            <span class="summary-label">Experiment Route</span>
-            <h3>方案篮子</h3>
-          </div>
-          <div class="basket-actions">
-            <button id="generate-route" type="button">生成实验路线</button>
-            <button id="close-basket" class="icon-button ghost" type="button" title="关闭方案篮子" aria-label="关闭方案篮子">×</button>
-          </div>
-        </header>
-        <div id="basket-items" class="basket-items"></div>
-        <div id="route-result" class="route-result"></div>
-      </section>
-      <section id="board" class="material-board"></section>
-    </main>
-
-    <div id="analysis-overlay" class="analysis-overlay" hidden></div>
-    <aside id="analysis-drawer" class="analysis-drawer" hidden aria-label="论文深度缝合分析">
-      <header class="analysis-header">
-        <div>
-          <span class="summary-label">Deep Stitch Analysis</span>
-          <h3 id="analysis-title">深度缝合分析</h3>
-          <p id="analysis-meta"></p>
-        </div>
-        <div class="analysis-header-actions">
-          <button id="refresh-analysis" class="secondary" type="button">重新分析</button>
-          <button id="close-analysis" class="icon-button ghost" type="button" title="关闭分析" aria-label="关闭分析">×</button>
-        </div>
-      </header>
-      <div id="analysis-content" class="analysis-content"></div>
-    </aside>
+        <footer class="dialog-actions">
+          <button id="cancel-profile" class="secondary-button" type="button">取消</button>
+          <button class="primary-button" type="submit">保存画像</button>
+        </footer>
+      </form>
+    </dialog>
 
     <script src="/app.js"></script>
   </body>
