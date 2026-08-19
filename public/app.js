@@ -294,6 +294,55 @@ function renderWorkflowState(active = "") {
   });
 }
 
+function parseVenueRankings(paper) {
+  if (Array.isArray(paper.venue_rankings)) return paper.venue_rankings;
+  try {
+    const value = JSON.parse(paper.venue_rankings_json || "[]");
+    return Array.isArray(value) ? value : [];
+  } catch {
+    return [];
+  }
+}
+
+function venueTypeLabel(value) {
+  return {
+    conference: "会议",
+    journal: "期刊",
+    preprint: "预印本",
+  }[value] || "来源待核验";
+}
+
+function venueStatusLabel(value) {
+  return {
+    published: "已发表",
+    accepted: "已录用 · 作者声明",
+    preprint: "仅预印本",
+  }[value] || "状态待核验";
+}
+
+function renderVenueRanks(paper) {
+  const rankings = parseVenueRankings(paper);
+  if (!rankings.length) return '<span class="venue-rank venue-rank-unrated">未定级</span>';
+  return rankings.map((ranking) => {
+    const rankClass = `${ranking.system || "rank"}-${ranking.rank || ""}`
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-");
+    const title = [
+      ranking.index,
+      ranking.system,
+      ranking.rank,
+      ranking.year,
+      ranking.category,
+    ].filter(Boolean).join(" · ");
+    const label = escapeHtml(ranking.label || `${ranking.system} ${ranking.rank}`);
+    const sourceUrl = safeExternalUrl(ranking.source_url);
+    if (sourceUrl === "#") {
+      return `<span class="venue-rank venue-rank-${rankClass}" title="${escapeHtml(title)}">${label}</span>`;
+    }
+    return `<a class="venue-rank venue-rank-${rankClass}" href="${sourceUrl}" target="_blank" rel="noreferrer" title="${escapeHtml(title)} · 查看评级来源">${label}</a>`;
+  }).join("");
+}
+
 function renderMaterialRow(paper) {
   const rank = state.materials.findIndex((item) => item.id === paper.id) + 1;
   const rankingScore = Number(paper.ranking_score || paper.stitchability_score || 0);
@@ -304,6 +353,9 @@ function renderMaterialRow(paper) {
   const codeStatus = evidence?.code?.status || "not_found";
   const hasEvidence = ["verified", "text_insufficient"].includes(evidenceStatus);
   const hasAnalysis = Boolean(paper.deep_analysis_json);
+  const venueName = paper.venue_name || "arXiv";
+  const venueStatus = venueStatusLabel(paper.venue_status || "preprint");
+  const venueRanks = renderVenueRanks(paper);
   const tierLabels = {
     direct: "直接相关",
     transferable: "可迁移",
@@ -329,6 +381,12 @@ function renderMaterialRow(paper) {
           ${paper.is_read ? '<span class="state-read">已读</span>' : ""}
         </div>
         <h3>${escapeHtml(paper.title)}</h3>
+        <div class="publication-line">
+          <span class="venue-kind">${escapeHtml(venueTypeLabel(paper.venue_type || "preprint"))}</span>
+          <strong title="${escapeHtml(paper.journal_ref || venueName)}">${escapeHtml(venueName)}</strong>
+          <span class="venue-ranks">${venueRanks}</span>
+          <small>${escapeHtml(venueStatus)}</small>
+        </div>
         <p>${escapeHtml(paper.stitch_action || paper.recommendation_reason)}</p>
         <small>${escapeHtml(String(paper.published_at || "").slice(0, 10))} · ${escapeHtml(paper.authors)}</small>
       </div>
@@ -350,6 +408,7 @@ function renderMaterialRow(paper) {
         <summary>查看详情与反馈</summary>
         <div class="detail-content">
           <div class="detail-grid">
+            <section><span>发表信息</span><p>${escapeHtml(venueName)} · ${escapeHtml(venueTypeLabel(paper.venue_type))} · ${escapeHtml(paper.venue_rank || "未定级")} · ${escapeHtml(venueStatus)}<br>元数据：${escapeHtml(paper.venue_source || "arXiv")}${paper.doi ? `<br>DOI：${escapeHtml(paper.doi)}` : ""}</p></section>
             <section><span>判断依据</span><p>${escapeHtml(paper.filter_reason || paper.ranking_reason || "基于项目画像判断")}</p></section>
             <section><span>关键证据</span><p>${escapeHtml(paper.evidence_quote || paper.summary)}</p></section>
             <section class="detail-summary"><span>摘要</span><p>${escapeHtml(paper.summary)}</p></section>
@@ -358,6 +417,7 @@ function renderMaterialRow(paper) {
             <div class="paper-links">
               <a href="${safeExternalUrl(paper.entry_url)}" target="_blank" rel="noreferrer">论文页</a>
               <a href="${safeExternalUrl(paper.pdf_url)}" target="_blank" rel="noreferrer">PDF</a>
+              ${paper.doi ? `<a href="${safeExternalUrl(`https://doi.org/${paper.doi}`)}" target="_blank" rel="noreferrer">DOI</a>` : ""}
               <button data-action="evidence" type="button">${hasEvidence ? "证据详情" : "核验全文"}</button>
             </div>
             <div class="feedback-control" aria-label="素材反馈">

@@ -27,6 +27,7 @@ from auto_paper.route_builder import build_experiment_route
 from auto_paper.profile_validator import validate_project_profile
 from auto_paper.scheduler import DailyScheduler
 from auto_paper.summarizer import summarize_paper
+from auto_paper.venue_ranker import resolve_venue
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -270,6 +271,7 @@ class AutoPaperApp:
                         candidate.published_at,
                     )
                     material = build_material_card(candidate, topic, summary)
+                    venue = resolve_venue(candidate.journal_ref, candidate.comment, candidate.doi)
                     self.db.upsert_paper(
                         {
                             "topic_id": topic["id"],
@@ -297,6 +299,7 @@ class AutoPaperApp:
                             "is_relevant": material["is_relevant"],
                             "relevance_tier": material["relevance_tier"],
                             "filter_reason": material["filter_reason"],
+                            **venue,
                         }
                     )
                     relevant_total += int(material["is_relevant"])

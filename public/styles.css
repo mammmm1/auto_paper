@@ -938,6 +938,95 @@ p {
   line-height: 1.4;
 }
 
+.publication-line {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+  color: #667386;
+  font-size: 9px;
+}
+
+.publication-line .venue-kind {
+  border: 1px solid #d9dee5;
+  border-radius: 3px;
+  padding: 2px 5px;
+  background: #ffffff;
+  color: #657183;
+  font-weight: 800;
+}
+
+.publication-line > strong {
+  min-width: 0;
+  max-width: min(100%, 360px);
+  overflow: hidden;
+  color: #364253;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.venue-ranks {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.venue-rank {
+  border-radius: 3px;
+  padding: 2px 5px;
+  background: #eef1f4;
+  color: #536174;
+  font-size: 9px;
+  font-weight: 850;
+  line-height: 1.25;
+  text-decoration: none;
+}
+
+a.venue-rank:hover {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.venue-rank-ccf-a {
+  background: #fbe8e7;
+  color: #9f302b;
+}
+
+.venue-rank-ccf-b {
+  background: #e7effb;
+  color: #2b5f9f;
+}
+
+.venue-rank-ccf-c {
+  background: #edf0f3;
+  color: #596577;
+}
+
+.venue-rank-jcr-q1 {
+  background: #fff1d6;
+  color: #895612;
+}
+
+.venue-rank-jcr-q2 {
+  background: #e8f4ef;
+  color: #2f6f58;
+}
+
+.venue-rank-unrated {
+  border: 1px dashed #cbd2db;
+  padding: 1px 5px;
+  background: transparent;
+  color: #818b98;
+}
+
+.publication-line > small {
+  color: #8a94a2;
+  font-size: 9px;
+}
+
 .material-main > p {
   display: -webkit-box;
   overflow: hidden;

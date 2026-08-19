@@ -1,6 +1,10 @@
 import json
+from pathlib import Path
+import tempfile
 import unittest
 
+from auto_paper.arxiv_client import parse_arxiv_feed
+from auto_paper.database import Database
 from auto_paper.deep_analyzer import (
     analysis_input_hash,
     build_rule_analysis,
@@ -18,6 +22,7 @@ from auto_paper.quality import build_quality_metrics, rank_materials
 from auto_paper.recommender import score_paper
 from auto_paper.route_builder import build_experiment_route
 from auto_paper.summarizer import summarize_paper
+from auto_paper.venue_ranker import resolve_venue
 
 
 class SummarizerTests(unittest.TestCase):
@@ -43,6 +48,115 @@ class RecommenderTests(unittest.TestCase):
 
         self.assertGreater(score, 0)
         self.assertTrue(reason)
+
+
+class ArxivClientTests(unittest.TestCase):
+    def test_parses_publication_metadata(self):
+        feed = """<?xml version="1.0" encoding="UTF-8"?>
+        <feed xmlns="http://www.w3.org/2005/Atom" xmlns:arxiv="http://arxiv.org/schemas/atom">
+          <entry>
+            <id>https://arxiv.org/abs/2601.00001v2</id>
+            <updated>2026-02-01T00:00:00Z</updated>
+            <published>2026-01-01T00:00:00Z</published>
+            <title>Scale-aware detector</title>
+            <summary>A remote sensing detector.</summary>
+            <author><name>Researcher One</name></author>
+            <link title="pdf" href="https://arxiv.org/pdf/2601.00001" />
+            <arxiv:comment>Accepted to CVPR 2026</arxiv:comment>
+            <arxiv:journal_ref>Proceedings of CVPR 2026</arxiv:journal_ref>
+            <arxiv:doi>10.1000/example</arxiv:doi>
+          </entry>
+        </feed>"""
+
+        paper = parse_arxiv_feed(feed)[0]
+
+        self.assertEqual(paper.journal_ref, "Proceedings of CVPR 2026")
+        self.assertEqual(paper.comment, "Accepted to CVPR 2026")
+        self.assertEqual(paper.doi, "10.1000/example")
+
+
+class VenueRankerTests(unittest.TestCase):
+    def test_recognizes_ccf_conference_from_comment(self):
+        venue = resolve_venue(comment="Accepted to ECCV 2026 as a full paper")
+
+        self.assertEqual(venue["venue_name"], "ECCV")
+        self.assertEqual(venue["venue_type"], "conference")
+        self.assertEqual(venue["venue_rank"], "CCF B")
+        self.assertEqual(venue["venue_status"], "accepted")
+
+    def test_recognizes_journal_with_ccf_and_jcr_ranks(self):
+        venue = resolve_venue(
+            journal_ref="IEEE Transactions on Pattern Analysis and Machine Intelligence, 2026"
+        )
+
+        rankings = json.loads(venue["venue_rankings_json"])
+        self.assertEqual(venue["venue_name"], "IEEE TPAMI")
+        self.assertEqual(venue["venue_rank"], "CCF A / JCR Q1")
+        self.assertEqual([item["system"] for item in rankings], ["CCF", "JCR"])
+
+    def test_remote_sensing_text_is_not_mistaken_for_journal(self):
+        venue = resolve_venue(comment="A benchmark for remote sensing object detection")
+
+        self.assertEqual(venue["venue_name"], "arXiv")
+        self.assertEqual(venue["venue_status"], "preprint")
+        self.assertEqual(venue["venue_rank"], "")
+
+    def test_venue_mention_without_acceptance_stays_preprint(self):
+        venue = resolve_venue(comment="Includes a comparison with CVPR 2025 methods")
+
+        self.assertEqual(venue["venue_name"], "arXiv")
+        self.assertEqual(venue["venue_status"], "preprint")
+
+    def test_keeps_unknown_journal_without_inventing_rank(self):
+        venue = resolve_venue(journal_ref="Journal of Emerging Geospatial Methods, 12(3), 2026")
+
+        self.assertEqual(venue["venue_type"], "journal")
+        self.assertEqual(venue["venue_status"], "published")
+        self.assertEqual(venue["venue_rank"], "")
+
+
+class DatabaseTests(unittest.TestCase):
+    def test_upsert_persists_venue_metadata(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db = Database(Path(directory) / "test.sqlite3")
+            topic = db.add_topic("Venue test", "all:test")
+            venue = resolve_venue(comment="Accepted to CVPR 2026")
+            db.upsert_paper(
+                {
+                    "topic_id": topic["id"],
+                    "external_id": "2601.00001v1",
+                    "title": "Venue-aware paper",
+                    "authors": "Researcher",
+                    "abstract": "Abstract",
+                    "summary": "Summary",
+                    "recommendation_score": 80,
+                    "recommendation_reason": "Relevant",
+                    "published_at": "2026-01-01T00:00:00Z",
+                    "updated_at": "2026-01-01T00:00:00Z",
+                    "pdf_url": "https://arxiv.org/pdf/2601.00001",
+                    "entry_url": "https://arxiv.org/abs/2601.00001",
+                    "material_type": "idea",
+                    "integration_area": "Experiment",
+                    "integration_subtag": "Benchmark",
+                    "stitch_action": "Compare the method",
+                    "stitch_difficulty": "low",
+                    "relevance_score": 80,
+                    "stitchability_score": 75,
+                    "code_availability_score": 25,
+                    "evidence_sources": "title and abstract",
+                    "evidence_quote": "Evidence",
+                    "is_relevant": True,
+                    "relevance_tier": "direct",
+                    "filter_reason": "Direct match",
+                    **venue,
+                }
+            )
+
+            paper = db.list_papers(topic["id"], limit=1)[0]
+
+            self.assertEqual(paper["venue_name"], "CVPR")
+            self.assertEqual(paper["venue_rank"], "CCF A")
+            self.assertEqual(paper["venue_status"], "accepted")
 
 
 class MaterializerTests(unittest.TestCase):
@@ -437,6 +551,17 @@ class ExporterTests(unittest.TestCase):
             "title": "Scale Router",
             "authors": "Author",
             "published_at": "2026-08-01",
+            "venue_name": "CVPR",
+            "venue_type": "conference",
+            "venue_rank": "CCF A",
+            "venue_status": "published",
+            "venue_source": "arXiv journal_ref",
+            "venue_rankings_json": json.dumps(
+                [{"system": "CCF", "rank": "A", "label": "CCF A", "year": "2026"}]
+            ),
+            "doi": "10.1000/example",
+            "journal_ref": "Proceedings of CVPR 2026",
+            "comments": "Accepted to CVPR 2026",
             "recommendation_score": 80,
             "ranking_score": 82,
             "relevance_tier": "direct",
@@ -484,8 +609,11 @@ class ExporterTests(unittest.TestCase):
         self.assertIn("第 4 页", markdown)
         self.assertIn("github.com/example/model", markdown)
         self.assertIn("深度缝合分析", markdown)
+        self.assertIn("发表源：CVPR", markdown)
+        self.assertIn("刊会等级：CCF A", markdown)
         self.assertIn("full_text_pages", csv_output)
         self.assertIn("verified_repository", csv_output)
+        self.assertIn("venue_rankings_json", csv_output)
 
 
 if __name__ == "__main__":

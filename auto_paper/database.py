@@ -100,6 +100,15 @@ class Database:
             self._ensure_column(conn, "papers", "full_text_input_hash", "TEXT NOT NULL DEFAULT ''")
             self._ensure_column(conn, "papers", "full_text_updated_at", "TEXT NOT NULL DEFAULT ''")
             self._ensure_column(conn, "papers", "full_text_error", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(conn, "papers", "venue_name", "TEXT NOT NULL DEFAULT 'arXiv'")
+            self._ensure_column(conn, "papers", "venue_type", "TEXT NOT NULL DEFAULT 'preprint'")
+            self._ensure_column(conn, "papers", "venue_rank", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(conn, "papers", "venue_rankings_json", "TEXT NOT NULL DEFAULT '[]'")
+            self._ensure_column(conn, "papers", "venue_source", "TEXT NOT NULL DEFAULT 'arXiv'")
+            self._ensure_column(conn, "papers", "venue_status", "TEXT NOT NULL DEFAULT 'preprint'")
+            self._ensure_column(conn, "papers", "doi", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(conn, "papers", "journal_ref", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(conn, "papers", "comments", "TEXT NOT NULL DEFAULT ''")
 
     def _ensure_column(self, conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
         columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
@@ -297,7 +306,9 @@ class Database:
                     integration_area, integration_subtag, stitch_action,
                     stitch_difficulty, relevance_score, stitchability_score,
                     code_availability_score, evidence_sources, evidence_quote,
-                    is_relevant, relevance_tier, filter_reason
+                    is_relevant, relevance_tier, filter_reason, venue_name,
+                    venue_type, venue_rank, venue_rankings_json, venue_source,
+                    venue_status, doi, journal_ref, comments
                 )
                 VALUES (
                     :topic_id, :external_id, :title, :authors, :abstract, :summary,
@@ -306,7 +317,9 @@ class Database:
                     :integration_area, :integration_subtag, :stitch_action,
                     :stitch_difficulty, :relevance_score, :stitchability_score,
                     :code_availability_score, :evidence_sources, :evidence_quote,
-                    :is_relevant, :relevance_tier, :filter_reason
+                    :is_relevant, :relevance_tier, :filter_reason, :venue_name,
+                    :venue_type, :venue_rank, :venue_rankings_json, :venue_source,
+                    :venue_status, :doi, :journal_ref, :comments
                 )
                 ON CONFLICT(topic_id, external_id) DO UPDATE SET
                     title = excluded.title,
@@ -331,7 +344,16 @@ class Database:
                     evidence_quote = excluded.evidence_quote,
                     is_relevant = excluded.is_relevant,
                     relevance_tier = excluded.relevance_tier,
-                    filter_reason = excluded.filter_reason
+                    filter_reason = excluded.filter_reason,
+                    venue_name = excluded.venue_name,
+                    venue_type = excluded.venue_type,
+                    venue_rank = excluded.venue_rank,
+                    venue_rankings_json = excluded.venue_rankings_json,
+                    venue_source = excluded.venue_source,
+                    venue_status = excluded.venue_status,
+                    doi = excluded.doi,
+                    journal_ref = excluded.journal_ref,
+                    comments = excluded.comments
                 """,
                 paper,
             )

@@ -23,6 +23,9 @@ class PaperCandidate:
     updated_at: str
     pdf_url: str
     entry_url: str
+    journal_ref: str = ""
+    comment: str = ""
+    doi: str = ""
 
 
 def search_arxiv(query: str, max_results: int = 10) -> list[PaperCandidate]:
@@ -41,6 +44,10 @@ def search_arxiv(query: str, max_results: int = 10) -> list[PaperCandidate]:
     )
     data = _read_url(request)
 
+    return parse_arxiv_feed(data)
+
+
+def parse_arxiv_feed(data: bytes | str) -> list[PaperCandidate]:
     root = ET.fromstring(data)
     papers: list[PaperCandidate] = []
     for entry in root.findall("atom:entry", ATOM_NS):
@@ -59,6 +66,9 @@ def search_arxiv(query: str, max_results: int = 10) -> list[PaperCandidate]:
                 updated_at=_text(entry, "atom:updated"),
                 pdf_url=pdf_url,
                 entry_url=entry_id,
+                journal_ref=_clean(_text(entry, "arxiv:journal_ref")),
+                comment=_clean(_text(entry, "arxiv:comment")),
+                doi=_clean(_text(entry, "arxiv:doi")),
             )
         )
     return papers

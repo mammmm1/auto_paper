@@ -38,6 +38,12 @@ def papers_to_markdown(papers: list[dict]) -> str:
                 f"- 全文核验：{paper.get('full_text_status', '') or '未核验'}",
                 f"- 代码仓库状态：{code.get('status', 'not_found')}",
                 f"- 代码仓库：{', '.join(code_urls) or '未发现'}",
+                f"- 发表源：{paper.get('venue_name') or 'arXiv'}",
+                f"- 发表类型：{_venue_type_label(paper.get('venue_type'))}",
+                f"- 刊会等级：{paper.get('venue_rank') or '未定级'}",
+                f"- 发表状态：{_venue_status_label(paper.get('venue_status'))}",
+                f"- 元数据来源：{paper.get('venue_source') or 'arXiv'}",
+                f"- DOI：{paper.get('doi') or '未提供'}",
                 f"- 作者：{paper['authors']}",
                 f"- 发布时间：{paper['published_at']}",
                 f"- 论文链接：{paper['entry_url']}",
@@ -80,6 +86,15 @@ def papers_to_csv(papers: list[dict]) -> str:
         "title",
         "authors",
         "published_at",
+        "venue_name",
+        "venue_type",
+        "venue_rank",
+        "venue_status",
+        "venue_source",
+        "venue_rankings_json",
+        "doi",
+        "journal_ref",
+        "comments",
         "recommendation_score",
         "ranking_score",
         "ranking_reason",
@@ -155,3 +170,19 @@ def _json_object(raw: Any) -> dict[str, Any]:
 def _clip(value: Any, limit: int) -> str:
     text = " ".join(str(value or "").split())
     return text if len(text) <= limit else f"{text[: limit - 1]}…"
+
+
+def _venue_type_label(value: Any) -> str:
+    return {
+        "conference": "会议",
+        "journal": "期刊",
+        "preprint": "预印本",
+    }.get(str(value or ""), "未知")
+
+
+def _venue_status_label(value: Any) -> str:
+    return {
+        "published": "已发表",
+        "accepted": "已录用（作者声明）",
+        "preprint": "预印本",
+    }.get(str(value or ""), "待核验")
