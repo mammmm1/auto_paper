@@ -14,6 +14,7 @@ from auto_paper.config import Settings, load_settings
 from auto_paper.database import Database
 from auto_paper.exporter import papers_to_csv, papers_to_markdown
 from auto_paper.materializer import build_material_card, build_project_query
+from auto_paper.quality import build_quality_metrics, rank_materials
 from auto_paper.recommender import score_paper
 from auto_paper.route_builder import build_experiment_route
 from auto_paper.scheduler import DailyScheduler
@@ -30,6 +31,14 @@ class AutoPaperApp:
         self.db = Database(settings.database_path)
         self.db.ensure_seed_topic()
 
+    def ranked_papers(self, topic_id: int | None = None, limit: int = 100) -> list[dict]:
+        papers = self.db.list_papers(topic_id=topic_id, limit=500)
+        return rank_materials(papers)[:limit]
+
+    def quality_metrics(self, topic_id: int) -> dict:
+        papers = self.db.list_papers(topic_id=topic_id, limit=500)
+        return build_quality_metrics(papers)
+
     def run_topics(self, topic_id: int | None = None) -> dict:
         topics = self.db.list_topics(enabled_only=True)
         if topic_id:
@@ -37,6 +46,7 @@ class AutoPaperApp:
 
         total = 0
         relevant_total = 0
+        tier_total = {"direct": 0, "transferable": 0, "reference": 0, "irrelevant": 0}
         errors: list[str] = []
         for topic in topics:
             try:
@@ -49,7 +59,8 @@ class AutoPaperApp:
                         existing["summary"],
                     )
                     self.db.update_paper_analysis(existing["id"], material)
-                papers = search_arxiv(query, topic["max_results"])
+                recall_size = min(50, max(30, int(topic["max_results"]) * 2))
+                papers = search_arxiv(query, recall_size)
                 for candidate in papers:
                     summary = summarize_paper(candidate.title, candidate.abstract, query)
                     score, reason = score_paper(
@@ -84,10 +95,12 @@ class AutoPaperApp:
                             "evidence_sources": material["evidence_sources"],
                             "evidence_quote": material["evidence_quote"],
                             "is_relevant": material["is_relevant"],
+                            "relevance_tier": material["relevance_tier"],
                             "filter_reason": material["filter_reason"],
                         }
                     )
                     relevant_total += int(material["is_relevant"])
+                    tier_total[material["relevance_tier"]] += 1
                 total += len(papers)
                 self.db.record_run(topic["id"], "success", "ok", len(papers))
             except Exception as exc:  # noqa: BLE001 - API failures should be captured in MVP runs.
@@ -101,6 +114,7 @@ class AutoPaperApp:
             "fetched_count": total,
             "relevant_count": relevant_total,
             "filtered_count": total - relevant_total,
+            "tier_counts": tier_total,
             "errors": errors,
         }
 
@@ -119,7 +133,15 @@ def create_handler(app: AutoPaperApp) -> type[BaseHTTPRequestHandler]:
                 query = parse_qs(route.query)
                 topic_id = _optional_int(query.get("topic_id", [""])[0])
                 limit = _optional_int(query.get("limit", ["100"])[0]) or 100
-                self._json(app.db.list_papers(topic_id=topic_id, limit=limit))
+                self._json(app.ranked_papers(topic_id=topic_id, limit=limit))
+                return
+            if route.path == "/api/quality":
+                query = parse_qs(route.query)
+                topic_id = _optional_int(query.get("topic_id", [""])[0])
+                if not topic_id:
+                    self._json({"error": "missing topic_id"}, HTTPStatus.BAD_REQUEST)
+                    return
+                self._json(app.quality_metrics(topic_id))
                 return
             if route.path == "/api/runs":
                 self._json(app.db.list_runs())
@@ -264,7 +286,7 @@ def create_handler(app: AutoPaperApp) -> type[BaseHTTPRequestHandler]:
         def _export(self, raw_query: str) -> None:
             query = parse_qs(raw_query)
             topic_id = _optional_int(query.get("topic_id", [""])[0])
-            papers = app.db.list_papers(topic_id=topic_id, limit=500)
+            papers = app.ranked_papers(topic_id=topic_id, limit=500)
             export_format = query.get("format", ["markdown"])[0]
             if export_format == "csv":
                 body = papers_to_csv(papers).encode("utf-8-sig")

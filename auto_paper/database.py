@@ -85,6 +85,7 @@ class Database:
             self._ensure_column(conn, "papers", "evidence_sources", "TEXT NOT NULL DEFAULT ''")
             self._ensure_column(conn, "papers", "evidence_quote", "TEXT NOT NULL DEFAULT ''")
             self._ensure_column(conn, "papers", "is_relevant", "INTEGER NOT NULL DEFAULT 1")
+            self._ensure_column(conn, "papers", "relevance_tier", "TEXT NOT NULL DEFAULT 'reference'")
             self._ensure_column(conn, "papers", "filter_reason", "TEXT NOT NULL DEFAULT ''")
             self._ensure_column(conn, "papers", "user_feedback", "TEXT NOT NULL DEFAULT ''")
             self._ensure_column(conn, "papers", "is_read", "INTEGER NOT NULL DEFAULT 0")
@@ -260,7 +261,7 @@ class Database:
                     integration_area, integration_subtag, stitch_action,
                     stitch_difficulty, relevance_score, stitchability_score,
                     code_availability_score, evidence_sources, evidence_quote,
-                    is_relevant, filter_reason
+                    is_relevant, relevance_tier, filter_reason
                 )
                 VALUES (
                     :topic_id, :external_id, :title, :authors, :abstract, :summary,
@@ -269,7 +270,7 @@ class Database:
                     :integration_area, :integration_subtag, :stitch_action,
                     :stitch_difficulty, :relevance_score, :stitchability_score,
                     :code_availability_score, :evidence_sources, :evidence_quote,
-                    :is_relevant, :filter_reason
+                    :is_relevant, :relevance_tier, :filter_reason
                 )
                 ON CONFLICT(topic_id, external_id) DO UPDATE SET
                     title = excluded.title,
@@ -293,6 +294,7 @@ class Database:
                     evidence_sources = excluded.evidence_sources,
                     evidence_quote = excluded.evidence_quote,
                     is_relevant = excluded.is_relevant,
+                    relevance_tier = excluded.relevance_tier,
                     filter_reason = excluded.filter_reason
                 """,
                 paper,
@@ -354,6 +356,7 @@ class Database:
             "evidence_sources",
             "evidence_quote",
             "is_relevant",
+            "relevance_tier",
             "filter_reason",
         ]
         assignments = ", ".join(f"{field} = ?" for field in fields)

@@ -98,11 +98,13 @@ def build_material_card(candidate: Any, project: dict[str, Any], summary: str) -
     subtag = _subtag(area, text)
     material_type = _material_type(text)
     relevance = _relevance_score(text, project)
-    is_relevant, filter_reason = _relevance_gate(text, project, relevance)
+    is_relevant, relevance_tier, filter_reason = _relevance_gate(text, project, relevance)
     code_availability = _code_score(text)
     stitchability = _stitchability_score(area_score, relevance, code_availability, text, project)
-    if not is_relevant:
-        stitchability = min(stitchability, 35.0)
+    if relevance_tier == "reference":
+        stitchability = min(stitchability, 49.0)
+    elif relevance_tier == "irrelevant":
+        stitchability = min(stitchability, 25.0)
     difficulty = _difficulty(area, text, project)
     action = _stitch_action(area, subtag, material_type, project)
     evidence_sources, evidence_quote = _evidence(candidate.title, candidate.abstract, area, project)
@@ -115,6 +117,7 @@ def build_material_card(candidate: Any, project: dict[str, Any], summary: str) -
         "stitch_difficulty": difficulty,
         "relevance_score": relevance,
         "is_relevant": is_relevant,
+        "relevance_tier": relevance_tier,
         "filter_reason": filter_reason,
         "stitchability_score": stitchability,
         "code_availability_score": code_availability,
@@ -210,9 +213,18 @@ def _relevance_score(text: str, project: dict[str, Any]) -> float:
     if _is_remote_sensing_project(profile_text):
         domain_hits = _signal_hits(text, REMOTE_DOMAIN_SIGNALS)
         task_hits = _signal_hits(text, VISION_TASK_SIGNALS)
+        target_task_hits = _signal_hits(text, _project_task_signals(project))
         method_hits = _signal_hits(text, METHOD_SIGNALS)
+        project_hits = _project_alignment_hits(text, project)
         negative_hits = _signal_hits(text, UNRELATED_DOMAIN_SIGNALS)
-        score = 12 + min(domain_hits * 24, 42) + min(task_hits * 13, 26) + min(method_hits * 6, 20)
+        score = (
+            10
+            + min(domain_hits * 22, 40)
+            + min(target_task_hits * 18, 30)
+            + min(task_hits * 5, 10)
+            + min(method_hits * 5, 15)
+            + min(project_hits * 4, 16)
+        )
         score -= min(negative_hits * 18, 36)
         return round(max(0, min(score, 100)), 1)
 
@@ -228,23 +240,38 @@ def _relevance_score(text: str, project: dict[str, Any]) -> float:
     return round(min(35 + hits / len(project_terms) * 65, 100), 1)
 
 
-def _relevance_gate(text: str, project: dict[str, Any], relevance: float) -> tuple[bool, str]:
+def _relevance_gate(text: str, project: dict[str, Any], relevance: float) -> tuple[bool, str, str]:
     profile_text = " ".join(str(value) for value in project.values()).lower()
     if not _is_remote_sensing_project(profile_text):
-        return relevance >= 45, "基于项目关键词覆盖度判断"
+        if relevance >= 65:
+            return True, "direct", "项目关键词高度覆盖，判定为直接相关"
+        if relevance >= 45:
+            return True, "transferable", "项目关键词部分覆盖，可作为迁移素材"
+        if relevance >= 30:
+            return False, "reference", "关键词覆盖有限，仅作为补充参考"
+        return False, "irrelevant", "关键词覆盖不足"
 
     domain_hits = [signal for signal in REMOTE_DOMAIN_SIGNALS if signal in text]
     task_hits = [signal for signal in VISION_TASK_SIGNALS if signal in text]
+    target_task_hits = [signal for signal in _project_task_signals(project) if signal in text]
     method_hits = [signal for signal in METHOD_SIGNALS if signal in text]
     unrelated_hits = [signal for signal in UNRELATED_DOMAIN_SIGNALS if signal in text]
 
-    if domain_hits:
-        return True, f"命中遥感领域证据：{', '.join(domain_hits[:2])}"
+    if domain_hits and target_task_hits:
+        return True, "direct", (
+            f"同时命中遥感领域与当前任务：{', '.join((domain_hits + target_task_hits)[:3])}"
+        )
+    if domain_hits and method_hits:
+        return True, "transferable", (
+            f"命中遥感领域与可迁移方法：{', '.join((domain_hits + method_hits)[:3])}"
+        )
     if task_hits and method_hits and not unrelated_hits:
-        return True, "未直接命中遥感词，但任务与方法均匹配，可作为跨领域迁移素材"
+        return True, "transferable", "未直接命中遥感词，但任务与方法均匹配，可跨领域迁移"
+    if domain_hits:
+        return False, "reference", f"仅命中遥感领域证据：{', '.join(domain_hits[:2])}"
     if unrelated_hits:
-        return False, f"疑似来自无关领域：{', '.join(unrelated_hits[:2])}"
-    return False, "缺少遥感领域证据，且未同时命中视觉任务与可迁移方法"
+        return False, "irrelevant", f"疑似来自无关领域：{', '.join(unrelated_hits[:2])}"
+    return False, "irrelevant", "缺少遥感领域证据，且未同时命中视觉任务与可迁移方法"
 
 
 def _is_remote_sensing_project(text: str) -> bool:
@@ -256,6 +283,39 @@ def _is_remote_sensing_project(text: str) -> bool:
 
 def _signal_hits(text: str, signals: list[str]) -> int:
     return sum(1 for signal in signals if signal in text)
+
+
+def _project_task_signals(project: dict[str, Any]) -> list[str]:
+    task = str(project.get("task_type") or "").lower()
+    if any(signal in task for signal in ["变化检测", "change detection"]):
+        return ["change detection"]
+    if any(signal in task for signal in ["语义分割", "semantic segmentation"]):
+        return ["semantic segmentation"]
+    if any(signal in task for signal in ["实例分割", "instance segmentation"]):
+        return ["instance segmentation"]
+    if any(signal in task for signal in ["目标检测", "object detection", "detection"]):
+        return ["object detection", "small object", "tiny object", "oriented object"]
+    return VISION_TASK_SIGNALS
+
+
+def _project_alignment_hits(text: str, project: dict[str, Any]) -> int:
+    generic = {
+        "remote",
+        "sensing",
+        "image",
+        "images",
+        "object",
+        "detection",
+        "segmentation",
+        "feature",
+    }
+    terms = _keywords(
+        " ".join(
+            str(project.get(field) or "")
+            for field in ["idea", "keywords", "backbone", "neck", "head", "dataset"]
+        )
+    ) - generic
+    return sum(1 for term in terms if term in text)
 
 
 def _stitchability_score(

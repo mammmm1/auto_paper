@@ -1,6 +1,7 @@
 import unittest
 
 from auto_paper.materializer import build_material_card, build_project_query
+from auto_paper.quality import build_quality_metrics, rank_materials
 from auto_paper.recommender import score_paper
 from auto_paper.route_builder import build_experiment_route
 from auto_paper.summarizer import summarize_paper
@@ -53,6 +54,7 @@ class MaterializerTests(unittest.TestCase):
         card = build_material_card(Candidate(), project, "summary")
 
         self.assertEqual(card["integration_area"], "Neck")
+        self.assertEqual(card["relevance_tier"], "direct")
         self.assertGreater(card["stitchability_score"], 0)
         self.assertIn("FPN", card["stitch_action"])
 
@@ -79,6 +81,7 @@ class MaterializerTests(unittest.TestCase):
         card = build_material_card(Candidate(), project, "summary")
 
         self.assertFalse(card["is_relevant"])
+        self.assertEqual(card["relevance_tier"], "irrelevant")
         self.assertLessEqual(card["stitchability_score"], 35)
 
     def test_cross_domain_detection_method_is_kept(self):
@@ -95,7 +98,93 @@ class MaterializerTests(unittest.TestCase):
         card = build_material_card(Candidate(), project, "summary")
 
         self.assertTrue(card["is_relevant"])
+        self.assertEqual(card["relevance_tier"], "transferable")
         self.assertIn("跨领域", card["filter_reason"])
+
+    def test_remote_domain_without_task_or_method_is_reference(self):
+        class Candidate:
+            title = "A satellite imagery dataset for agricultural monitoring"
+            abstract = "We release remote sensing observations for crop statistics."
+
+        project = {
+            "domain": "遥感图像",
+            "task_type": "目标检测",
+            "idea": "增强遥感小目标检测",
+            "keywords": "remote sensing, transformer, small object",
+        }
+        card = build_material_card(Candidate(), project, "summary")
+
+        self.assertFalse(card["is_relevant"])
+        self.assertEqual(card["relevance_tier"], "reference")
+
+    def test_other_remote_sensing_task_is_transferable_not_direct(self):
+        class Candidate:
+            title = "Attention transformer for remote sensing change detection"
+            abstract = "We propose an attention architecture for satellite image change detection."
+
+        project = {
+            "domain": "遥感图像",
+            "task_type": "语义分割",
+            "idea": "增强遥感语义分割",
+            "keywords": "remote sensing, transformer, semantic segmentation",
+        }
+        card = build_material_card(Candidate(), project, "summary")
+
+        self.assertTrue(card["is_relevant"])
+        self.assertEqual(card["relevance_tier"], "transferable")
+
+
+class QualityTests(unittest.TestCase):
+    def test_feedback_ranking_influences_similar_materials(self):
+        materials = [
+            self._material(1, "Neck", "module", "Feature Fusion", "stitchable"),
+            self._material(2, "Neck", "module", "Feature Fusion", ""),
+            self._material(3, "Backbone", "architecture", "Representation", ""),
+        ]
+
+        ranked = rank_materials(materials)
+        similar = next(item for item in ranked if item["id"] == 2)
+
+        self.assertGreater(similar["feedback_adjustment"], 3)
+        self.assertIn("同类素材", similar["ranking_reason"])
+
+    def test_quality_metrics_reports_label_gap(self):
+        materials = [
+            self._material(1, "Neck", "module", "Feature Fusion", "useful"),
+            self._material(2, "Backbone", "architecture", "Representation", ""),
+            self._material(3, "Loss", "module", "Optimization", "irrelevant"),
+        ]
+
+        metrics = build_quality_metrics(materials)
+
+        self.assertEqual(metrics["labeled_count"], 2)
+        self.assertEqual(metrics["positive_count"], 1)
+        self.assertEqual(metrics["irrelevant_count"], 1)
+        self.assertEqual(metrics["remaining_labels"], 1)
+        self.assertEqual(metrics["status"], "collecting")
+
+    @staticmethod
+    def _material(
+        material_id: int,
+        area: str,
+        material_type: str,
+        subtag: str,
+        feedback: str,
+    ) -> dict:
+        return {
+            "id": material_id,
+            "integration_area": area,
+            "material_type": material_type,
+            "integration_subtag": subtag,
+            "user_feedback": feedback,
+            "relevance_tier": "direct",
+            "is_relevant": 1,
+            "stitchability_score": 70,
+            "relevance_score": 75,
+            "code_availability_score": 55,
+            "stitch_difficulty": "中",
+            "published_at": "2026-08-01T00:00:00Z",
+        }
 
 
 class RouteBuilderTests(unittest.TestCase):

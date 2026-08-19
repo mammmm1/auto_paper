@@ -2,7 +2,10 @@ const state = {
   projects: [],
   currentProjectId: null,
   materials: [],
+  quality: null,
   showIrrelevant: false,
+  viewMode: "top",
+  areaFilter: "all",
   route: null,
 };
 
@@ -17,6 +20,7 @@ const basketItemsEl = document.querySelector("#basket-items");
 const basketCountEl = document.querySelector("#basket-count");
 const routeResultEl = document.querySelector("#route-result");
 const filterSummaryEl = document.querySelector("#filter-summary");
+const qualityMetricsEl = document.querySelector("#quality-metrics");
 const AREAS = ["Backbone", "Neck", "Head", "Loss", "Data", "Training", "Experiment"];
 const AREA_LABELS = {
   Backbone: "骨干",
@@ -68,8 +72,18 @@ async function loadProjects() {
 }
 
 async function loadMaterials() {
-  const query = state.currentProjectId ? `?topic_id=${state.currentProjectId}` : "";
-  state.materials = await api(`/api/papers${query}`);
+  if (!state.currentProjectId) {
+    state.materials = [];
+    state.quality = null;
+    renderBoard();
+    return;
+  }
+  const [materials, quality] = await Promise.all([
+    api(`/api/papers?topic_id=${state.currentProjectId}&limit=500`),
+    api(`/api/quality?topic_id=${state.currentProjectId}`),
+  ]);
+  state.materials = materials;
+  state.quality = quality;
   renderBoard();
 }
 
@@ -123,14 +137,25 @@ function renderProfileSummary() {
 
 function renderBoard() {
   renderMetrics();
+  renderQuality();
   renderBasket();
   const hiddenCount = state.materials.filter((material) => !isRelevant(material)).length;
-  const visibleMaterials = state.showIrrelevant
+  const baseMaterials = state.showIrrelevant
     ? state.materials
     : state.materials.filter(isRelevant);
-  filterSummaryEl.textContent = hiddenCount
-    ? `已隐藏 ${hiddenCount} 张低相关素材`
-    : "当前没有低相关素材";
+  const topIds = new Set(state.quality?.top_material_ids || []);
+  let visibleMaterials = baseMaterials.filter((material) => {
+    if (state.viewMode === "top") return topIds.has(material.id);
+    if (state.viewMode === "code") return Number(material.code_availability_score || 0) >= 55;
+    if (state.viewMode === "low") return material.stitch_difficulty === "低";
+    return true;
+  });
+  if (state.areaFilter !== "all") {
+    visibleMaterials = visibleMaterials.filter(
+      (material) => material.integration_area === state.areaFilter,
+    );
+  }
+  filterSummaryEl.textContent = `当前 ${visibleMaterials.length} 张 · 折叠 ${hiddenCount} 张参考/不相关素材`;
   if (visibleMaterials.length === 0) {
     boardEl.innerHTML = `
       <article class="empty-state">
@@ -168,7 +193,7 @@ function renderMetrics() {
   const relevant = state.materials.filter(isRelevant);
   const total = relevant.length;
   const best = relevant.reduce(
-    (max, material) => Math.max(max, Number(material.stitchability_score || 0)),
+    (max, material) => Math.max(max, Number(material.ranking_score || 0)),
     0,
   );
   const codeReady = relevant.filter(
@@ -177,24 +202,53 @@ function renderMetrics() {
   const basketSize = state.materials.filter((material) => Boolean(material.in_basket)).length;
   metricsEl.innerHTML = `
     <div><span>有效素材</span><strong>${total}</strong></div>
-    <div><span>最高缝合度</span><strong>${best.toFixed(1)}</strong></div>
+    <div><span>最高排序分</span><strong>${best.toFixed(1)}</strong></div>
     <div><span>代码线索</span><strong>${codeReady}</strong></div>
     <div><span>方案篮子</span><strong>${basketSize}</strong></div>
   `;
 }
 
+function renderQuality() {
+  const quality = state.quality;
+  if (!quality) {
+    qualityMetricsEl.innerHTML = "";
+    return;
+  }
+  const usefulRate = quality.useful_rate === null ? "待标注" : `${quality.useful_rate.toFixed(0)}%`;
+  const statusLabels = {
+    collecting: "收集反馈中",
+    on_track: "达到目标",
+    needs_work: "需要优化",
+  };
+  qualityMetricsEl.innerHTML = `
+    <div><span>Top 10 已标注</span><strong>${quality.labeled_count}/${quality.top_n}</strong></div>
+    <div><span>正向反馈</span><strong>${quality.positive_count}</strong></div>
+    <div><span>不相关反馈</span><strong>${quality.irrelevant_count}/${quality.targets.irrelevant_max}</strong></div>
+    <div><span>标注内有效率</span><strong>${usefulRate}</strong></div>
+    <div><span>质量状态</span><strong>${escapeHtml(statusLabels[quality.status] || "待判断")}</strong></div>
+    <div><span>还需标注</span><strong>${quality.remaining_labels}</strong></div>
+  `;
+}
+
 function renderMaterialCard(paper) {
-  const stitchScore = Number(paper.stitchability_score || paper.recommendation_score || 0);
+  const rankingScore = Number(paper.ranking_score || paper.stitchability_score || 0);
   const feedback = paper.user_feedback || "";
+  const tier = paper.relevance_tier || "reference";
+  const tierLabels = {
+    direct: "直接相关",
+    transferable: "可迁移",
+    reference: "仅供参考",
+    irrelevant: "不相关",
+  };
   return `
     <article class="material-card ${isRelevant(paper) ? "" : "low-relevance"}" data-material-id="${paper.id}">
       <div class="card-topline">
         <div class="card-flags">
           <span>${escapeHtml(paper.material_type)}</span>
-          ${isRelevant(paper) ? "" : '<span class="warning-flag">低相关</span>'}
+          <span class="tier-flag tier-${escapeHtml(tier)}">${escapeHtml(tierLabels[tier] || "待判断")}</span>
           ${paper.is_read ? '<span class="read-flag">已读</span>' : ""}
         </div>
-        <strong>${stitchScore.toFixed(1)}</strong>
+        <strong title="反馈重排分">${rankingScore.toFixed(1)}</strong>
       </div>
       <h4>${escapeHtml(paper.title)}</h4>
       <div class="tag-row">
@@ -209,6 +263,7 @@ function renderMaterialCard(paper) {
       <p class="action-text">${escapeHtml(paper.stitch_action || paper.recommendation_reason)}</p>
       <p class="evidence"><strong>${escapeHtml(paper.evidence_sources || "证据")}</strong>：${escapeHtml(paper.evidence_quote || paper.summary)}</p>
       <p class="filter-reason">${escapeHtml(paper.filter_reason || "基于项目画像判断相关性")}</p>
+      <p class="ranking-reason">排序：${escapeHtml(paper.ranking_reason || "基础评分")}</p>
       <details>
         <summary>摘要</summary>
         <p>${escapeHtml(paper.summary)}</p>
@@ -294,16 +349,13 @@ function renderRoute() {
 }
 
 async function updateMaterial(material, payload) {
-  const updated = await api(`/api/materials?id=${material.id}`, {
+  await api(`/api/materials?id=${material.id}`, {
     method: "PATCH",
     body: JSON.stringify(payload),
   });
-  state.materials = state.materials.map((item) =>
-    item.id === material.id ? { ...item, ...updated } : item,
-  );
   state.route = null;
   routeResultEl.innerHTML = "";
-  renderBoard();
+  await loadMaterials();
 }
 
 function fillProjectForm(project) {
@@ -398,7 +450,8 @@ document.querySelector("#run-search").addEventListener("click", async () => {
     if (result.errors?.length) {
       setStatus(`完成 ${result.fetched_count} 张素材卡，部分失败：${result.errors.join("；")}`);
     } else {
-      setStatus(`搜索完成：保留 ${result.relevant_count} 张，折叠 ${result.filtered_count} 张低相关素材`);
+      const tiers = result.tier_counts || {};
+      setStatus(`候选池 ${result.fetched_count} 张：直接相关 ${tiers.direct || 0}，可迁移 ${tiers.transferable || 0}，其余进入复核区`);
     }
   } catch (error) {
     setStatus(`搜索失败：${error.message}`);
@@ -409,6 +462,21 @@ document.querySelector("#refresh-projects").addEventListener("click", loadProjec
 
 document.querySelector("#show-irrelevant").addEventListener("change", (event) => {
   state.showIrrelevant = event.target.checked;
+  renderBoard();
+});
+
+document.querySelector("#view-modes").addEventListener("click", (event) => {
+  const button = event.target.closest("[data-view]");
+  if (!button) return;
+  state.viewMode = button.dataset.view;
+  document.querySelectorAll("#view-modes [data-view]").forEach((item) => {
+    item.classList.toggle("active", item === button);
+  });
+  renderBoard();
+});
+
+document.querySelector("#area-filter").addEventListener("change", (event) => {
+  state.areaFilter = event.target.value;
   renderBoard();
 });
 

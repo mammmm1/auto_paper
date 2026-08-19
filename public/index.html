@@ -93,11 +93,36 @@
         <section id="board-metrics" class="board-metrics"></section>
       </div>
       <section id="profile-summary" class="profile-summary"></section>
+      <section class="quality-panel">
+        <div class="quality-title">
+          <span class="summary-label">Quality Loop</span>
+          <strong>Top 10 推荐质量</strong>
+        </div>
+        <div id="quality-metrics" class="quality-metrics"></div>
+      </section>
       <div class="workbench-controls">
-        <label class="switch-control">
-          <input id="show-irrelevant" type="checkbox" />
-          <span>显示低相关素材</span>
-        </label>
+        <div class="filter-controls">
+          <div id="view-modes" class="segmented-control" aria-label="素材视图">
+            <button class="active" data-view="top" type="button">Top 10</button>
+            <button data-view="all" type="button">全部有效</button>
+            <button data-view="code" type="button">有代码</button>
+            <button data-view="low" type="button">低成本</button>
+          </div>
+          <select id="area-filter" aria-label="按接入位置筛选">
+            <option value="all">全部位置</option>
+            <option value="Backbone">Backbone</option>
+            <option value="Neck">Neck</option>
+            <option value="Head">Head</option>
+            <option value="Loss">Loss</option>
+            <option value="Data">Data</option>
+            <option value="Training">Training</option>
+            <option value="Experiment">Experiment</option>
+          </select>
+          <label class="switch-control">
+            <input id="show-irrelevant" type="checkbox" />
+            <span>显示参考/不相关</span>
+          </label>
+        </div>
         <span id="filter-summary" class="filter-summary"></span>
       </div>
       <section id="basket-panel" class="basket-panel" hidden>
