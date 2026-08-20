@@ -7,9 +7,36 @@ from typing import Any
 CONFIG_AREA_KEYS = {
     "Backbone": {"backbone", "encoder"},
     "Neck": {"decoder", "feature_fusion", "neck"},
-    "Head": {"bbox_head", "decode_head", "detection_head", "head", "mask_head", "roi_head", "rpn_head"},
-    "Loss": {"criterion", "loss", "loss_cls", "loss_bbox", "loss_mask"},
-    "Data": {"data", "dataloader", "dataset", "pipeline", "test_dataloader", "train_dataloader", "val_dataloader"},
+    "Head": {
+        "auxiliary_head",
+        "bbox_head",
+        "decode_head",
+        "detection_head",
+        "head",
+        "mask_head",
+        "roi_head",
+        "rpn_head",
+        "seg_head",
+    },
+    "Loss": {
+        "criterion",
+        "loss",
+        "loss_aux",
+        "loss_bbox",
+        "loss_cls",
+        "loss_decode",
+        "loss_mask",
+    },
+    "Data": {
+        "data",
+        "data_preprocessor",
+        "dataloader",
+        "dataset",
+        "pipeline",
+        "test_dataloader",
+        "train_dataloader",
+        "val_dataloader",
+    },
     "Training": {"optim_wrapper", "optimizer", "param_scheduler", "train_cfg", "train_loop"},
     "Experiment": {"default_hooks", "env_cfg", "test_cfg", "val_cfg", "visualizer"},
 }
@@ -23,9 +50,24 @@ IMPORTANT_CONFIG_PARAMETERS = {
     "embed_dims",
     "strides",
     "featmap_strides",
+    "in_index",
     "num_classes",
     "input_size",
     "img_scale",
+    "crop_size",
+    "size",
+    "channels",
+    "pool_scales",
+    "dilations",
+    "align_corners",
+    "ignore_index",
+    "mean",
+    "std",
+    "bgr_to_rgb",
+    "pad_val",
+    "seg_pad_val",
+    "use_sigmoid",
+    "loss_weight",
     "frozen_stages",
     "norm_cfg",
     "init_cfg",
@@ -128,10 +170,16 @@ def build_code_graph(
                 )
 
     framework_set = set(frameworks)
-    if "MMDetection" in framework_set or any(item.get("registry") in {"MODELS", "DATASETS", "TRANSFORMS"} for item in registrations):
+    if "MMSegmentation" in framework_set:
+        adapter = "mmsegmentation"
+        adapter_label = "MMSegmentation / MMEngine"
+    elif "MMDetection" in framework_set:
         adapter = "mmdetection"
         adapter_label = "MMDetection / MMEngine"
-    elif "OpenMMLab" in framework_set:
+    elif "OpenMMLab" in framework_set or any(
+        item.get("registry") in {"MODELS", "DATASETS", "TRANSFORMS"}
+        for item in registrations
+    ):
         adapter = "mmengine"
         adapter_label = "MMEngine"
     elif "PyTorch" in framework_set:
@@ -302,11 +350,17 @@ def _config_components(
 
 
 def _config_area(key_path: str) -> str:
-    parts = {
+    ordered_parts = [
         part.lower()
         for part in key_path.replace("[", ".").replace("]", "").split(".")
-        if part
-    }
+        if part and not part.isdigit()
+    ]
+    if ordered_parts:
+        leaf = ordered_parts[-1]
+        for area, keys in CONFIG_AREA_KEYS.items():
+            if leaf in keys:
+                return area
+    parts = set(ordered_parts)
     for area, keys in CONFIG_AREA_KEYS.items():
         if parts.intersection(keys):
             return area

@@ -202,15 +202,15 @@
           </label>
           <label>
             任务类型
-            <input name="task_type" placeholder="目标检测" />
+            <input name="task_type" placeholder="语义分割" />
           </label>
           <label class="field-wide">
             当前 idea
-            <textarea name="idea" required rows="4" placeholder="Transformer 浅层偏向小物体、深层偏向大物体..."></textarea>
+            <textarea name="idea" required rows="4" placeholder="利用 Transformer 层间尺度偏向增强细粒度边界与多尺度区域分割..."></textarea>
           </label>
           <label class="field-wide">
             关键词
-            <textarea name="keywords" rows="3" placeholder="remote sensing, transformer, small object"></textarea>
+            <textarea name="keywords" rows="3" placeholder="remote sensing, semantic segmentation, multi-scale feature"></textarea>
           </label>
           <label>
             Backbone
@@ -218,15 +218,15 @@
           </label>
           <label>
             Neck
-            <input name="neck" placeholder="FPN" />
+            <input name="neck" placeholder="UPerNet PPM + FPN" />
           </label>
           <label>
             Head
-            <input name="head" placeholder="Detection Head" />
+            <input name="head" placeholder="UPerHead + FCN Auxiliary Head" />
           </label>
           <label>
             Dataset
-            <input name="dataset" placeholder="DOTA / DIOR" />
+            <input name="dataset" placeholder="ISPRS Potsdam / Vaihingen" />
           </label>
           <label class="field-wide">
             本地代码目录

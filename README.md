@@ -18,7 +18,8 @@
 - 深度缝合分析：为单张或 Top 10 素材生成模块接口、最小实现、对照实验、风险、证据与置信度。
 - 跨论文综合：把 Top 10 转成能力对比矩阵、兼容关系和保守 / 平衡 / 探索三档实验方案，并可一键加入方案篮。
 - 代码结构地图：只读扫描本地 Python 工程，识别训练框架、Backbone / Neck / Head / Loss / Data / Training、配置与运行入口。
-- 框架代码图：为 MMDetection / MMEngine 与纯 PyTorch 解析配置继承、注册类型、构造参数、`forward` 契约，以及配置到源码的链接。
+- 框架代码图：为 MMSegmentation / MMDetection / MMEngine 与纯 PyTorch 解析配置继承、注册类型、构造参数、`forward` 契约，以及配置到源码的链接。
+- 分割契约检查：识别 `decode_head`、`auxiliary_head`、`loss_decode` 和 `data_preprocessor`，核对多层通道、`in_index`、类别输出与 mask 流程。
 - 文件级实施清单：区分待定位、已定位与契约就绪，展示源码、配置键、接口检查、冲突提示和修改步骤；不直接修改业务代码。
 - 双通道分析：默认使用本地规则；配置 OpenAI 后通过 Responses API 和严格 JSON Schema 生成，并按论文、画像与模型指纹缓存。
 - 全文证据：下载并缓存 PDF，提取方法、实验、消融、数据与结论段落，记录具体页码。
@@ -78,7 +79,7 @@ python -m auto_paper.server --host 0.0.0.0 --port 8000
 auto_paper/
   arxiv_client.py    # arXiv 搜索
   code_scanner.py    # 本地代码结构与训练组件静态扫描
-  framework_analyzer.py # MMDetection/PyTorch 配置、注册器与接口代码图
+  framework_analyzer.py # MMSeg/MMDet/PyTorch 配置、注册器与接口代码图
   database.py        # SQLite 表结构和读写
   deep_analyzer.py   # 规则/OpenAI 结构化深度缝合分析
   evidence_extractor.py # PDF 缓存、全文片段与代码仓库核验

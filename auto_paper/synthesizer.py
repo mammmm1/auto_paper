@@ -538,7 +538,7 @@ def _implementation_map(
                 "change_plan": _change_plan(item, target, config_target, graph),
                 "contract_checks": _contract_checks(target, config_target),
                 "conflicts": conflicts,
-                "validation": _code_validation(item["area"]),
+                "validation": _code_validation(item["area"], graph.get("adapter") or ""),
             }
         )
     return mapped
@@ -599,8 +599,9 @@ def _change_plan(
     registry = str(target.get("registry") or "")
     if registry:
         steps.append(f"为新模块使用 {registry}.register_module 注册独立类型名。")
-    elif graph.get("adapter") == "mmdetection":
-        steps.append("确认新模块进入 MMDetection MODELS 注册表，避免直接修改现有类。")
+    elif graph.get("adapter") in {"mmdetection", "mmsegmentation", "mmengine"}:
+        framework = "MMSegmentation" if graph.get("adapter") == "mmsegmentation" else "MMEngine"
+        steps.append(f"确认新模块进入 {framework} MODELS 注册表，避免直接修改现有类。")
     if config_target:
         steps.append(
             f"复制实验配置，在 {config_target.get('path')} 的 {config_target.get('config_key')}.type 切换新类型。"
@@ -634,7 +635,19 @@ def _contract_checks(
         important = {
             key: value
             for key, value in parameters.items()
-            if key in {"in_channels", "out_channels", "num_outs", "out_indices", "num_classes", "strides"}
+            if key
+            in {
+                "align_corners",
+                "channels",
+                "in_channels",
+                "in_index",
+                "num_classes",
+                "num_outs",
+                "out_channels",
+                "out_indices",
+                "pool_scales",
+                "strides",
+            }
         }
         checks.append(f"配置键 {config_target.get('config_key')}")
         if important:
@@ -654,16 +667,34 @@ def _contract_conflicts(
     interface = target.get("interface") or {}
     if area in {"Backbone", "Neck", "Head"} and not interface.get("parameters"):
         conflicts.append({"severity": "warning", "message": "未解析到 forward 参数，需要人工确认调用签名。"})
-    if graph.get("adapter") == "mmdetection" and not target.get("registry"):
+    if graph.get("adapter") in {"mmdetection", "mmsegmentation"} and not target.get("registry"):
         conflicts.append({"severity": "warning", "message": "目标类未发现 MMEngine 注册装饰器，配置 type 可能无法构建。"})
     parameters = (config_target or {}).get("parameters") or {}
     in_channels = parameters.get("in_channels")
+    in_index = parameters.get("in_index")
     num_outs = parameters.get("num_outs")
     if isinstance(in_channels, list) and isinstance(num_outs, int) and num_outs < len(in_channels):
         conflicts.append(
             {
                 "severity": "warning",
                 "message": f"num_outs={num_outs} 小于输入特征层数量 {len(in_channels)}，需要核对尺度输出。",
+            }
+        )
+    config_key = str((config_target or {}).get("config_key") or "")
+    if (
+        graph.get("adapter") == "mmsegmentation"
+        and "head" in config_key
+        and isinstance(in_channels, list)
+        and isinstance(in_index, list)
+        and len(in_channels) != len(in_index)
+    ):
+        conflicts.append(
+            {
+                "severity": "warning",
+                "message": (
+                    f"in_channels 包含 {len(in_channels)} 层，但 in_index 包含 {len(in_index)} 层，"
+                    "decode head 无法逐层对齐。"
+                ),
             }
         )
     return conflicts
@@ -674,7 +705,18 @@ def _word_tokens(value: str) -> set[str]:
     return {token.lower() for token in re.split(r"[^A-Za-z0-9]+", expanded) if len(token) > 2}
 
 
-def _code_validation(area: str) -> list[str]:
+def _code_validation(area: str, adapter: str = "") -> list[str]:
+    if adapter == "mmsegmentation":
+        segmentation_checks = {
+            "Backbone": ["检查各 stage 输出尺寸、通道数与 out_indices", "运行最小前向传播和显存测试"],
+            "Neck": ["检查多尺度特征数量、stride 与通道数", "运行特征融合单元测试"],
+            "Head": ["检查 in_channels、in_index 与类别 logits", "运行单批次 encode_decode 烟雾测试"],
+            "Loss": ["检查 ignore_index、loss_decode 键名与有限梯度", "在固定 mask 上比较基线损失"],
+            "Data": ["检查 mask 类别映射、裁剪尺寸和 seg_pad_val", "可视化 Potsdam/Vaihingen 样本及标签"],
+            "Training": ["检查优化器参数组和调度器步进时机", "运行短周期训练烟雾测试"],
+            "Experiment": ["记录 mIoU、mF1、OA 与分类别指标", "保留基线配置用于可归因对照"],
+        }
+        return segmentation_checks.get(area, ["运行导入检查", "执行最小分割烟雾测试"])
     checks = {
         "Backbone": ["检查各 stage 输出尺寸与通道数", "运行最小前向传播和显存测试"],
         "Neck": ["检查多尺度特征数量、stride 与通道数", "运行特征融合单元测试"],

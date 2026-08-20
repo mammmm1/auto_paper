@@ -14,8 +14,18 @@ AREAS = {
         "signals": ["neck", "fpn", "pyramid", "fusion", "multi-scale", "multiscale", "feature aggregation"],
     },
     "Head": {
-        "tags": ["Detection Head", "Decoder", "Prediction"],
-        "signals": ["head", "detector", "decoder", "query", "proposal", "classification", "regression"],
+        "tags": ["Prediction Head", "Segmentation Decoder", "Detection Head"],
+        "signals": [
+            "head",
+            "detector",
+            "decoder",
+            "decode head",
+            "segmentation",
+            "query",
+            "proposal",
+            "classification",
+            "regression",
+        ],
     },
     "Loss": {
         "tags": ["Small-object Reweighting", "Auxiliary Supervision", "Optimization"],
@@ -23,7 +33,18 @@ AREAS = {
     },
     "Data": {
         "tags": ["Dataset", "Augmentation", "Sampling"],
-        "signals": ["dataset", "augmentation", "sample", "sampling", "dota", "dior", "nwpu", "remote sensing"],
+        "signals": [
+            "dataset",
+            "augmentation",
+            "sample",
+            "sampling",
+            "dota",
+            "dior",
+            "nwpu",
+            "potsdam",
+            "vaihingen",
+            "remote sensing",
+        ],
     },
     "Training": {
         "tags": ["Training Strategy", "Pretraining", "Schedule"],
@@ -40,7 +61,7 @@ TYPE_SIGNALS = {
     "architecture": ["architecture", "framework", "pipeline", "network"],
     "module": ["module", "block", "attention", "fusion", "head", "loss"],
     "experiment": ["ablation", "benchmark", "evaluation", "experiment"],
-    "dataset": ["dataset", "data", "dota", "dior", "nwpu"],
+    "dataset": ["dataset", "data", "dota", "dior", "nwpu", "potsdam", "vaihingen"],
     "idea": ["propose", "introduce", "present", "hypothesis", "approach"],
 }
 
@@ -56,6 +77,8 @@ REMOTE_DOMAIN_SIGNALS = [
     "dota",
     "dior",
     "nwpu",
+    "potsdam",
+    "vaihingen",
     "sar image",
     "hyperspectral",
 ]
@@ -80,6 +103,15 @@ METHOD_SIGNALS = [
     "swin",
     "vision transformer",
 ]
+
+REMOTE_DATASET_TERMS = {
+    "dior": "DIOR",
+    "dota": "DOTA",
+    "isaid": "iSAID",
+    "loveda": "LoveDA",
+    "potsdam": "Potsdam",
+    "vaihingen": "Vaihingen",
+}
 
 UNRELATED_DOMAIN_SIGNALS = [
     "wireless communication",
@@ -142,11 +174,20 @@ def build_project_query(project: dict[str, Any]) -> str:
     ]
     profile_text = " ".join(str(part) for part in parts).lower()
     if _is_remote_sensing_project(profile_text):
-        domain_clause = (
-            '(all:"remote sensing" OR all:"earth observation" OR '
-            'all:"satellite image" OR all:"aerial image" OR all:geospatial '
-            'OR all:DOTA OR all:DIOR)'
+        domain_terms = [
+            'all:"remote sensing"',
+            'all:"earth observation"',
+            'all:"satellite image"',
+            'all:"aerial image"',
+            "all:geospatial",
+        ]
+        dataset_text = str(project.get("dataset") or "").lower()
+        domain_terms.extend(
+            f"all:{name}"
+            for token, name in REMOTE_DATASET_TERMS.items()
+            if token in dataset_text
         )
+        domain_clause = f"({' OR '.join(domain_terms)})"
         focus_terms = []
         for signal in VISION_TASK_SIGNALS + METHOD_SIGNALS:
             if signal in profile_text:
@@ -192,6 +233,8 @@ def _subtag(area: str, text: str) -> str:
         return "Layer-wise Attention"
     if area == "Neck" and any(word in text for word in ["fusion", "fpn", "pyramid", "multi-scale", "multiscale"]):
         return "Feature Fusion"
+    if area == "Head" and any(word in text for word in ["segmentation", "decode head", "decoder", "pixel-wise"]):
+        return "Segmentation Decoder"
     if area == "Loss" and any(word in text for word in ["small object", "imbalance", "reweight"]):
         return "Small-object Reweighting"
     if area == "Experiment" and "ablation" in text:

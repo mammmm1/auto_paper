@@ -386,6 +386,49 @@ class SynthesisTests(unittest.TestCase):
         self.assertEqual(implementation["conflicts"], [])
         self.assertEqual(result["code_context"]["adapter"], "mmdetection")
 
+    def test_builds_mmsegmentation_decode_head_plan(self):
+        root = Path(__file__).parent / "fixtures" / "mmseg_project"
+        code_scan = scan_codebase(str(root))
+
+        result = build_research_synthesis(
+            {
+                "id": 1,
+                "name": "遥感语义分割",
+                "task_type": "语义分割",
+                "dataset": "ISPRS Potsdam / Vaihingen",
+            },
+            [self._material(1, "Head", "Scale-aware Decode Head", "中", 92, 88)],
+            code_scan,
+        )
+
+        implementation = result["schemes"][0]["implementation_map"][0]
+        self.assertEqual(implementation["status"], "contract_ready")
+        self.assertEqual(implementation["config_target"]["config_key"], "model.decode_head")
+        self.assertEqual(implementation["config_target"]["parameters"]["num_classes"], 6)
+        self.assertTrue(any("in_index" in item for item in implementation["contract_checks"]))
+        self.assertTrue(any("encode_decode" in item for item in implementation["validation"]))
+        self.assertEqual(implementation["conflicts"], [])
+        self.assertEqual(result["code_context"]["adapter"], "mmsegmentation")
+
+    def test_reports_mmsegmentation_feature_index_mismatch(self):
+        root = Path(__file__).parent / "fixtures" / "mmseg_project"
+        code_scan = scan_codebase(str(root))
+        decode_config = next(
+            item
+            for item in code_scan["components"]
+            if item.get("config_key") == "model.decode_head"
+        )
+        decode_config["parameters"]["in_index"] = [0, 1, 2]
+
+        result = build_research_synthesis(
+            {"id": 1, "name": "遥感语义分割", "task_type": "语义分割"},
+            [self._material(1, "Head", "Scale-aware Decode Head", "中", 92, 88)],
+            code_scan,
+        )
+
+        conflicts = result["schemes"][0]["implementation_map"][0]["conflicts"]
+        self.assertTrue(any("无法逐层对齐" in item["message"] for item in conflicts))
+
     @staticmethod
     def _material(
         material_id: int,
@@ -431,6 +474,43 @@ class SynthesisTests(unittest.TestCase):
 
 
 class CodeScannerTests(unittest.TestCase):
+    def test_resolves_mmsegmentation_decode_head_and_dataset_contracts(self):
+        root = Path(__file__).parent / "fixtures" / "mmseg_project"
+
+        result = scan_codebase(str(root))
+
+        graph = result["code_graph"]
+        component = next(
+            item
+            for item in result["components"]
+            if item["name"] == "LayerBiasUPerHead" and item["kind"] == "class"
+        )
+        decode_config = next(
+            item
+            for item in result["components"]
+            if item.get("config_key") == "model.decode_head"
+        )
+        loss_config = next(
+            item
+            for item in result["components"]
+            if item.get("config_key") == "model.decode_head.loss_decode"
+        )
+        link = next(item for item in graph["links"] if item["type"] == "LayerBiasUPerHead")
+
+        self.assertEqual(graph["adapter"], "mmsegmentation")
+        self.assertEqual(graph["adapter_label"], "MMSegmentation / MMEngine")
+        self.assertEqual(component["area"], "Head")
+        self.assertEqual(component["registry"], "MODELS")
+        self.assertEqual(component["interface"]["parameters"], ["inputs"])
+        self.assertEqual(component["constructor"]["defaults"]["channels"], 512)
+        self.assertEqual(decode_config["parameters"]["in_index"], [0, 1, 2, 3])
+        self.assertEqual(decode_config["parameters"]["num_classes"], 6)
+        self.assertEqual(loss_config["area"], "Loss")
+        self.assertEqual(loss_config["parameters"]["type"], "CrossEntropyLoss")
+        self.assertFalse(loss_config["parameters"]["use_sigmoid"])
+        self.assertEqual(link["config_key"], "model.decode_head")
+        self.assertEqual(link["source_path"], "projects/layer_bias_uper_head.py")
+
     def test_resolves_mmdetection_config_registry_and_forward_contract(self):
         root = Path(__file__).parent / "fixtures" / "mmdet_project"
 
@@ -521,6 +601,22 @@ class MaterializerTests(unittest.TestCase):
         self.assertIn("cat:cs.CV", query)
         self.assertIn('all:"remote sensing"', query)
         self.assertIn(" AND ", query)
+
+    def test_segmentation_query_uses_declared_remote_datasets(self):
+        query = build_project_query(
+            {
+                "domain": "高分辨率遥感图像",
+                "task_type": "语义分割",
+                "keywords": "remote sensing, semantic segmentation, transformer",
+                "dataset": "ISPRS Potsdam / Vaihingen",
+            }
+        )
+
+        self.assertIn("all:Potsdam", query)
+        self.assertIn("all:Vaihingen", query)
+        self.assertNotIn("all:DOTA", query)
+        self.assertNotIn("all:DIOR", query)
+        self.assertIn('all:"semantic segmentation"', query)
 
     def test_unrelated_remote_domain_is_filtered(self):
         class Candidate:

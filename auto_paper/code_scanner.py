@@ -62,6 +62,7 @@ FRAMEWORK_IMPORTS = {
     "mmcv": "OpenMMLab",
     "mmdet": "MMDetection",
     "mmengine": "OpenMMLab",
+    "mmseg": "MMSegmentation",
     "pytorch_lightning": "PyTorch Lightning",
     "tensorflow": "TensorFlow / Keras",
     "torch": "PyTorch",
