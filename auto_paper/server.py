@@ -27,6 +27,7 @@ from auto_paper.route_builder import build_experiment_route
 from auto_paper.profile_validator import validate_project_profile
 from auto_paper.scheduler import DailyScheduler
 from auto_paper.summarizer import summarize_paper
+from auto_paper.synthesizer import build_research_synthesis
 from auto_paper.venue_ranker import resolve_venue
 
 
@@ -138,6 +139,19 @@ class AutoPaperApp:
             "profile_check": self.profile_check(topic_id),
             "results": results,
         }
+
+    def synthesize_top(self, topic_id: int, limit: int = 10) -> dict | None:
+        project = self.project(topic_id)
+        if project is None:
+            return None
+        metrics = self.quality_metrics(topic_id)
+        paper_ids = [int(item) for item in metrics.get("top_material_ids", [])[: max(1, min(limit, 10))]]
+        papers_by_id = {
+            int(item["id"]): item
+            for item in self.ranked_papers(topic_id=topic_id, limit=500)
+        }
+        papers = [papers_by_id[paper_id] for paper_id in paper_ids if paper_id in papers_by_id]
+        return build_research_synthesis(project, papers)
 
     def cached_evidence(self, paper_id: int) -> dict | None:
         paper = self.db.get_paper(paper_id)
@@ -475,6 +489,18 @@ def create_handler(app: AutoPaperApp) -> type[BaseHTTPRequestHandler]:
                     self._json({"error": "project not found"}, HTTPStatus.NOT_FOUND)
                     return
                 self._json(app.analyze_top(topic_id, force=force))
+                return
+            if route.path == "/api/synthesis":
+                query = parse_qs(route.query)
+                topic_id = _optional_int(query.get("topic_id", [""])[0])
+                if not topic_id:
+                    self._json({"error": "missing topic_id"}, HTTPStatus.BAD_REQUEST)
+                    return
+                result = app.synthesize_top(topic_id)
+                if result is None:
+                    self._json({"error": "project not found"}, HTTPStatus.NOT_FOUND)
+                    return
+                self._json(result)
                 return
             if route.path == "/api/evidence":
                 query = parse_qs(route.query)

@@ -22,6 +22,7 @@ from auto_paper.quality import build_quality_metrics, rank_materials
 from auto_paper.recommender import score_paper
 from auto_paper.route_builder import build_experiment_route
 from auto_paper.summarizer import summarize_paper
+from auto_paper.synthesizer import build_research_synthesis
 from auto_paper.venue_ranker import resolve_venue
 
 
@@ -157,6 +158,100 @@ class DatabaseTests(unittest.TestCase):
             self.assertEqual(paper["venue_name"], "CVPR")
             self.assertEqual(paper["venue_rank"], "CCF A")
             self.assertEqual(paper["venue_status"], "accepted")
+
+
+class SynthesisTests(unittest.TestCase):
+    def test_builds_comparison_compatibility_and_three_schemes(self):
+        project = {
+            "id": 1,
+            "name": "遥感检测",
+            "task_type": "目标检测",
+            "idea": "分层尺度偏向增强小目标检测",
+            "backbone": "Swin",
+            "neck": "FPN",
+            "head": "Detection Head",
+        }
+        materials = [
+            self._material(1, "Neck", "Feature Fusion", "低", 88, 82),
+            self._material(2, "Backbone", "Layer Attention", "中", 84, 78),
+            self._material(3, "Neck", "Feature Fusion", "高", 80, 74),
+        ]
+
+        result = build_research_synthesis(project, materials)
+
+        self.assertEqual(len(result["comparison"]), 3)
+        self.assertEqual(len(result["schemes"]), 3)
+        self.assertEqual(result["schemes"][0]["id"], "conservative")
+        self.assertEqual(result["schemes"][0]["material_ids"], [1])
+        self.assertEqual(result["recommendation"]["primary_scheme_id"], "balanced")
+        self.assertTrue(
+            any(item["status"] == "alternative" for item in result["compatibility"]["relationships"])
+        )
+        balanced_areas = {item["area"] for item in result["schemes"][1]["modules"]}
+        self.assertIn("Backbone", balanced_areas)
+        self.assertIn("Neck", balanced_areas)
+
+    def test_reports_missing_evidence_and_analysis(self):
+        result = build_research_synthesis(
+            {"id": 1, "name": "项目"},
+            [
+                {
+                    "id": 1,
+                    "title": "Paper",
+                    "is_relevant": 1,
+                    "integration_area": "Experiment",
+                    "integration_subtag": "Ablation",
+                    "stitchability_score": 70,
+                }
+            ],
+        )
+
+        self.assertEqual(result["coverage"]["analyzed_count"], 0)
+        self.assertEqual(result["coverage"]["evidence_count"], 0)
+        self.assertTrue(any("缺少结构化" in item for item in result["limitations"]))
+
+    @staticmethod
+    def _material(
+        material_id: int,
+        area: str,
+        subtag: str,
+        difficulty: str,
+        score: float,
+        confidence: int,
+    ) -> dict:
+        analysis = {
+            "integration_area": area,
+            "reusable_module": f"{area} reusable module",
+            "integration_interface": {
+                "inputs": ["input features"],
+                "outputs": ["output features"],
+                "code_changes": ["add adapter"],
+            },
+            "minimal_implementation": ["freeze baseline", f"integrate {subtag}"],
+            "expected_gain": "improve target scale performance",
+            "risks": ["channel mismatch"],
+            "evidence": ["method evidence"],
+            "confidence": confidence,
+        }
+        evidence = {
+            "status": "verified",
+            "sections": [{"kind": "method", "page": 3, "text": "method section"}],
+            "code": {"status": "verified_repository", "urls": []},
+        }
+        return {
+            "id": material_id,
+            "title": f"Paper {material_id}",
+            "is_relevant": 1,
+            "integration_area": area,
+            "integration_subtag": subtag,
+            "stitch_action": f"integrate {subtag}",
+            "stitch_difficulty": difficulty,
+            "ranking_score": score,
+            "relevance_score": score,
+            "deep_analysis_json": json.dumps(analysis),
+            "full_text_status": "verified",
+            "full_text_json": json.dumps(evidence),
+        }
 
 
 class MaterializerTests(unittest.TestCase):

@@ -46,6 +46,7 @@
               <button data-stage="search" type="button">仅搜索素材</button>
               <button data-stage="evidence" type="button">仅核验全文</button>
               <button data-stage="analysis" type="button">仅生成分析</button>
+              <button data-stage="synthesis" type="button">生成跨论文方案</button>
               <hr />
               <a id="export-markdown" href="/api/export?format=markdown">下载 Markdown</a>
               <a id="export-csv" href="/api/export?format=csv">下载 CSV</a>
@@ -60,6 +61,7 @@
           <span data-workflow-step="search"><b>1</b>检索</span>
           <span data-workflow-step="evidence"><b>2</b>全文</span>
           <span data-workflow-step="analysis"><b>3</b>分析</span>
+          <span data-workflow-step="synthesis"><b>4</b>综合</span>
         </div>
       </section>
 
@@ -142,6 +144,22 @@
         </div>
       </header>
       <div id="analysis-content" class="analysis-content"></div>
+    </aside>
+
+    <div id="synthesis-overlay" class="drawer-overlay" hidden></div>
+    <aside id="synthesis-drawer" class="synthesis-drawer" hidden aria-label="跨论文综合方案">
+      <header class="drawer-header synthesis-header">
+        <div>
+          <span>Cross-paper Synthesis</span>
+          <h2>跨论文综合方案</h2>
+          <p id="synthesis-meta">基于 Top 10 证据与分析</p>
+        </div>
+        <div class="drawer-header-actions">
+          <button id="refresh-synthesis" class="secondary-button" type="button">重新综合</button>
+          <button id="close-synthesis" class="icon-button" type="button" title="关闭综合方案" aria-label="关闭综合方案">×</button>
+        </div>
+      </header>
+      <div id="synthesis-content" class="synthesis-content"></div>
     </aside>
 
     <dialog id="profile-dialog" class="profile-dialog">

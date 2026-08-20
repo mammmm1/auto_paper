@@ -8,6 +8,8 @@ const state = {
   viewMode: "top",
   areaFilter: "all",
   route: null,
+  synthesis: null,
+  activeSynthesisSchemeId: "balanced",
   activeAnalysisPaperId: null,
   busy: false,
 };
@@ -51,6 +53,9 @@ const qualityMetricsEl = document.querySelector("#quality-metrics");
 const analysisDrawerEl = document.querySelector("#analysis-drawer");
 const analysisOverlayEl = document.querySelector("#analysis-overlay");
 const analysisContentEl = document.querySelector("#analysis-content");
+const synthesisDrawerEl = document.querySelector("#synthesis-drawer");
+const synthesisOverlayEl = document.querySelector("#synthesis-overlay");
+const synthesisContentEl = document.querySelector("#synthesis-content");
 const runWorkflowEl = document.querySelector("#run-workflow");
 
 function setStatus(message) {
@@ -287,6 +292,9 @@ function renderWorkflowState(active = "") {
       (item) => ["verified", "text_insufficient"].includes(item.full_text_status),
     ),
     analysis: topMaterials.length > 0 && topMaterials.every((item) => item.deep_analysis_json),
+    synthesis: Boolean(
+      state.synthesis && Number(state.synthesis.project_id) === Number(state.currentProjectId),
+    ),
   };
   document.querySelectorAll("[data-workflow-step]").forEach((step) => {
     const name = step.dataset.workflowStep;
@@ -485,6 +493,7 @@ function openAnalysisDrawer(material, result) {
   const analysis = result.analysis;
   if (!analysis) return;
   closeBasketDrawer();
+  closeSynthesisDrawer();
   state.activeAnalysisPaperId = material.id;
   const sourceLabels = {
     openai: "OpenAI 结构化分析",
@@ -578,6 +587,150 @@ function renderAnalysisList(title, items = []) {
   return `<div class="analysis-list"><strong>${escapeHtml(title)}</strong>${(items || []).map((item) => `<p>${escapeHtml(item)}</p>`).join("") || "<p>-</p>"}</div>`;
 }
 
+function openSynthesisDrawer(result) {
+  closeBasketDrawer();
+  closeAnalysisDrawer();
+  state.synthesis = result;
+  state.activeSynthesisSchemeId = result.recommendation?.primary_scheme_id || "balanced";
+  renderSynthesis();
+  synthesisDrawerEl.hidden = false;
+  synthesisOverlayEl.hidden = false;
+  syncBodyLock();
+}
+
+function renderSynthesis() {
+  const result = state.synthesis;
+  if (!result) {
+    synthesisContentEl.innerHTML = "";
+    return;
+  }
+  const coverage = result.coverage || {};
+  const schemes = result.schemes || [];
+  const activeScheme = schemes.find((item) => item.id === state.activeSynthesisSchemeId)
+    || schemes[0];
+  const relationships = result.compatibility?.relationships || [];
+  const attentionItems = relationships
+    .filter((item) => item.status !== "compatible")
+    .slice(0, 8);
+  const relationLabels = {
+    compatible: "可组合",
+    conditional: "需验证",
+    alternative: "互为替代",
+  };
+  const allInBasket = activeScheme?.material_ids?.length
+    && activeScheme.material_ids.every((id) => state.materials.some(
+      (material) => material.id === id && Boolean(material.in_basket),
+    ));
+
+  document.querySelector("#synthesis-meta").textContent = `${result.material_count} 张素材 · ${coverage.areas?.length || 0} 个接入位置 · 综合置信度 ${coverage.confidence || 0}`;
+  synthesisContentEl.innerHTML = `
+    <section class="synthesis-overview">
+      <div class="synthesis-hypothesis">
+        <span>研究假设</span>
+        <strong>${escapeHtml(result.hypothesis)}</strong>
+        <p>${escapeHtml(result.recommendation?.reason || "")}</p>
+      </div>
+      <dl class="synthesis-coverage">
+        <div><dt>候选</dt><dd>${Number(result.material_count || 0)}</dd></div>
+        <div><dt>全文</dt><dd>${Number(coverage.evidence_count || 0)}</dd></div>
+        <div><dt>分析</dt><dd>${Number(coverage.analyzed_count || 0)}</dd></div>
+        <div><dt>代码</dt><dd>${Number(coverage.code_count || 0)}</dd></div>
+      </dl>
+    </section>
+
+    <details class="synthesis-section synthesis-comparison" open>
+      <summary><span>论文能力对比</span><small>${(coverage.areas || []).map(escapeHtml).join(" · ")}</small></summary>
+      <div class="synthesis-table-wrap">
+        <table class="synthesis-table">
+          <thead><tr><th>论文与位置</th><th>可复用模块</th><th>关键证据</th><th>决策信号</th></tr></thead>
+          <tbody>
+            ${(result.comparison || []).map((item) => `
+              <tr>
+                <td><span>${escapeHtml(item.area)} · ${escapeHtml(item.subtag)}</span><strong>${escapeHtml(item.title)}</strong></td>
+                <td><strong>${escapeHtml(item.module)}</strong><p>${escapeHtml(item.action)}</p></td>
+                <td><p>${escapeHtml(item.evidence)}</p></td>
+                <td><b>${Number(item.score || 0).toFixed(1)}</b><small>置信 ${Number(item.confidence || 0)} · ${escapeHtml(item.difficulty)}</small></td>
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
+      </div>
+    </details>
+
+    <details class="synthesis-section synthesis-compatibility" open>
+      <summary>
+        <span>模块兼容性</span>
+        <small>
+          <b class="relation-compatible">${Number(result.compatibility?.counts?.compatible || 0)} 可组合</b>
+          <b class="relation-conditional">${Number(result.compatibility?.counts?.conditional || 0)} 需验证</b>
+          <b class="relation-alternative">${Number(result.compatibility?.counts?.alternative || 0)} 替代项</b>
+        </small>
+      </summary>
+      <div class="compatibility-list">
+        ${attentionItems.length ? attentionItems.map((item) => `
+          <article>
+            <span class="relation-${escapeHtml(item.status)}">${escapeHtml(relationLabels[item.status] || "待判断")}</span>
+            <strong>${escapeHtml(item.left_title)} × ${escapeHtml(item.right_title)}</strong>
+            <p>${escapeHtml(item.reason)}</p>
+          </article>
+        `).join("") : '<p class="synthesis-empty-note">当前组合未发现明显的同位置竞争项。</p>'}
+      </div>
+    </details>
+
+    <section class="synthesis-section synthesis-schemes">
+      <div class="synthesis-section-heading">
+        <div><span>推荐方案</span><strong>从单项验证走向可归因组合</strong></div>
+        <small>建议优先执行平衡方案</small>
+      </div>
+      <div class="scheme-tabs" role="tablist" aria-label="综合方案">
+        ${schemes.map((scheme) => `
+          <button class="${scheme.id === activeScheme?.id ? "active" : ""}" data-scheme-view="${escapeHtml(scheme.id)}" type="button" role="tab" aria-selected="${scheme.id === activeScheme?.id}">
+            <strong>${escapeHtml(scheme.name)}</strong><span>${escapeHtml(scheme.strategy)}</span>
+          </button>
+        `).join("")}
+      </div>
+      ${activeScheme ? renderSynthesisScheme(activeScheme, allInBasket) : '<p class="synthesis-empty-note">当前没有足够素材生成方案。</p>'}
+    </section>
+
+    <footer class="synthesis-limitations">
+      <strong>判断边界</strong>
+      ${(result.limitations || []).map((item) => `<p>${escapeHtml(item)}</p>`).join("")}
+    </footer>
+  `;
+}
+
+function renderSynthesisScheme(scheme, allInBasket) {
+  return `
+    <div class="scheme-detail" role="tabpanel">
+      <header>
+        <div><strong>${escapeHtml(scheme.name)}</strong><p>${escapeHtml(scheme.rationale)}</p></div>
+        <dl>
+          <div><dt>成本</dt><dd>${escapeHtml(scheme.estimated_cost)}</dd></div>
+          <div><dt>置信度</dt><dd>${Number(scheme.confidence || 0)}/100</dd></div>
+        </dl>
+      </header>
+      <div class="scheme-modules">
+        ${(scheme.modules || []).map((item, index) => `
+          <article><b>${index + 1}</b><span>${escapeHtml(item.area)}</span><div><strong>${escapeHtml(item.module)}</strong><p>${escapeHtml(item.title)}</p></div><small>${escapeHtml(item.difficulty)} · ${Number(item.score || 0).toFixed(1)}</small></article>
+        `).join("")}
+      </div>
+      <div class="scheme-plan-grid">
+        <section><h3>实施步骤</h3><ol>${(scheme.implementation_steps || []).map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ol></section>
+        <section><h3>实验序列</h3><ol>${(scheme.experiments || []).map((item) => `<li><strong>${escapeHtml(item.name)}</strong><p>${escapeHtml(item.change)}</p></li>`).join("")}</ol></section>
+      </div>
+      <div class="scheme-decision-grid">
+        <section><h3>评价指标</h3><p>${(scheme.metrics || []).map(escapeHtml).join(" · ")}</p></section>
+        <section><h3>停止条件</h3>${(scheme.stop_conditions || []).map((item) => `<p>${escapeHtml(item)}</p>`).join("")}</section>
+        <section><h3>主要风险</h3>${(scheme.risks || []).map((item) => `<p>${escapeHtml(item)}</p>`).join("")}</section>
+      </div>
+      <footer>
+        <span>${scheme.material_ids.length} 张素材将加入方案篮</span>
+        <button class="primary-button" data-apply-scheme="${escapeHtml(scheme.id)}" type="button" ${allInBasket ? "disabled" : ""}>${allInBasket ? "已在方案篮" : "采用此方案"}</button>
+      </footer>
+    </div>
+  `;
+}
+
 function parseEvidence(material) {
   const raw = material?.full_text_json;
   if (!raw) return null;
@@ -605,6 +758,7 @@ function isRelevant(material) {
 }
 
 async function executeSearch() {
+  state.synthesis = null;
   renderWorkflowState("search");
   setStatus("正在检索论文并生成素材...");
   const result = await api(`/api/run?topic_id=${state.currentProjectId}`, { method: "POST" });
@@ -618,6 +772,7 @@ async function executeSearch() {
 }
 
 async function executeEvidence() {
+  state.synthesis = null;
   renderWorkflowState("evidence");
   setStatus("正在并行核验 Top 10 全文与代码仓库...");
   const result = await api(`/api/evidence/top?topic_id=${state.currentProjectId}`, { method: "POST" });
@@ -627,6 +782,7 @@ async function executeEvidence() {
 }
 
 async function executeAnalysis() {
+  state.synthesis = null;
   renderWorkflowState("analysis");
   setStatus("正在生成 Top 10 深度缝合分析...");
   const result = await api(`/api/analyze/top?topic_id=${state.currentProjectId}`, { method: "POST" });
@@ -634,6 +790,16 @@ async function executeAnalysis() {
   await loadMaterials();
   renderProfileCheck();
   setStatus(`分析完成：${result.analyzed_count} 张素材`);
+  return result;
+}
+
+async function executeSynthesis() {
+  renderWorkflowState("synthesis");
+  setStatus("正在比较 Top 10 并生成三档实验方案...");
+  const result = await api(`/api/synthesis?topic_id=${state.currentProjectId}`, { method: "POST" });
+  openSynthesisDrawer(result);
+  renderWorkflowState();
+  setStatus(`综合完成：${result.material_count} 张素材，${result.schemes?.length || 0} 套方案`);
   return result;
 }
 
@@ -645,6 +811,7 @@ async function runStage(stage) {
     if (stage === "search") await executeSearch();
     if (stage === "evidence") await executeEvidence();
     if (stage === "analysis") await executeAnalysis();
+    if (stage === "synthesis") await executeSynthesis();
     renderWorkflowState();
   } catch (error) {
     setStatus(`操作失败：${error.message}`);
@@ -660,9 +827,10 @@ async function runCompleteWorkflow() {
     await executeSearch();
     await executeEvidence();
     await executeAnalysis();
+    await executeSynthesis();
     await loadProfileCheck();
     renderWorkflowState();
-    setStatus("完整流程已完成，Top 10 已更新");
+    setStatus("完整流程已完成，Top 10 综合方案已生成");
   } catch (error) {
     setStatus(`流程中断：${error.message}`);
   } finally {
@@ -673,12 +841,15 @@ async function runCompleteWorkflow() {
 async function analyzeMaterial(material, force = false) {
   setStatus(force ? "正在重新分析素材..." : "正在打开深度分析...");
   const result = await api(`/api/analyze?paper_id=${material.id}${force ? "&force=1" : ""}`, { method: "POST" });
+  if (!result.cache_hit) state.synthesis = null;
   openAnalysisDrawer(material, result);
   await loadMaterials();
   setStatus(result.cache_hit ? "已打开缓存分析" : "深度分析已生成");
 }
 
 async function verifyMaterial(material, force = false) {
+  state.synthesis = null;
+  closeSynthesisDrawer();
   setStatus("正在下载 PDF 并提取全文证据...");
   const result = await api(`/api/evidence?paper_id=${material.id}${force ? "&force=1" : ""}`, { method: "POST" });
   await loadMaterials();
@@ -695,6 +866,10 @@ async function updateMaterial(material, payload) {
     method: "PATCH",
     body: JSON.stringify(payload),
   });
+  if (Object.hasOwn(payload, "user_feedback")) {
+    state.synthesis = null;
+    closeSynthesisDrawer();
+  }
   state.route = null;
   routeResultEl.innerHTML = "";
   await loadMaterials();
@@ -702,6 +877,7 @@ async function updateMaterial(material, payload) {
 
 function openBasketDrawer() {
   closeAnalysisDrawer();
+  closeSynthesisDrawer();
   basketPanelEl.hidden = false;
   basketOverlayEl.hidden = false;
   syncBodyLock();
@@ -719,8 +895,14 @@ function closeAnalysisDrawer() {
   syncBodyLock();
 }
 
+function closeSynthesisDrawer() {
+  synthesisDrawerEl.hidden = true;
+  synthesisOverlayEl.hidden = true;
+  syncBodyLock();
+}
+
 function syncBodyLock() {
-  const drawerOpen = !basketPanelEl.hidden || !analysisDrawerEl.hidden;
+  const drawerOpen = !basketPanelEl.hidden || !analysisDrawerEl.hidden || !synthesisDrawerEl.hidden;
   document.body.classList.toggle("drawer-open", drawerOpen);
 }
 
@@ -779,6 +961,8 @@ formEl.addEventListener("submit", async (event) => {
       ? await api(`/api/projects?id=${id}`, { method: "PUT", body: JSON.stringify(payload) })
       : await api("/api/projects", { method: "POST", body: JSON.stringify(payload) });
     state.currentProjectId = saved.id;
+    state.synthesis = null;
+    closeSynthesisDrawer();
     profileDialogEl.close();
     await loadProjects();
     await Promise.all([loadProfileCheck(), loadMaterials()]);
@@ -793,8 +977,10 @@ projectsEl.addEventListener("click", async (event) => {
   if (!item || state.busy) return;
   state.currentProjectId = Number(item.dataset.project);
   state.route = null;
+  state.synthesis = null;
   closeBasketDrawer();
   closeAnalysisDrawer();
+  closeSynthesisDrawer();
   renderProjects();
   renderProfileSummary();
   updateProjectLinks();
@@ -847,6 +1033,40 @@ basketItemsEl.addEventListener("click", async (event) => {
     setStatus("已移出方案");
   } catch (error) {
     setStatus(`操作失败：${error.message}`);
+  }
+});
+
+synthesisContentEl.addEventListener("click", async (event) => {
+  const tab = event.target.closest("[data-scheme-view]");
+  if (tab) {
+    state.activeSynthesisSchemeId = tab.dataset.schemeView;
+    renderSynthesis();
+    return;
+  }
+
+  const applyButton = event.target.closest("[data-apply-scheme]");
+  if (!applyButton || state.busy) return;
+  const scheme = state.synthesis?.schemes?.find(
+    (item) => item.id === applyButton.dataset.applyScheme,
+  );
+  if (!scheme) return;
+
+  try {
+    setBusy(true);
+    setStatus(`正在采用${scheme.name}...`);
+    await Promise.all((scheme.material_ids || []).map((id) => api(`/api/materials?id=${id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ in_basket: true }),
+    })));
+    state.route = null;
+    routeResultEl.innerHTML = "";
+    await loadMaterials();
+    renderSynthesis();
+    setStatus(`${scheme.name}已加入方案篮，可继续生成实验路线`);
+  } catch (error) {
+    setStatus(`采用方案失败：${error.message}`);
+  } finally {
+    setBusy(false);
   }
 });
 
@@ -910,9 +1130,14 @@ document.querySelector("#refresh-analysis").addEventListener("click", async () =
   }
 });
 
+document.querySelector("#close-synthesis").addEventListener("click", closeSynthesisDrawer);
+synthesisOverlayEl.addEventListener("click", closeSynthesisDrawer);
+document.querySelector("#refresh-synthesis").addEventListener("click", () => runStage("synthesis"));
+
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
-  if (!analysisDrawerEl.hidden) closeAnalysisDrawer();
+  if (!synthesisDrawerEl.hidden) closeSynthesisDrawer();
+  else if (!analysisDrawerEl.hidden) closeAnalysisDrawer();
   else if (!basketPanelEl.hidden) closeBasketDrawer();
 });
 document.addEventListener("click", (event) => {
