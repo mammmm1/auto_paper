@@ -220,6 +220,8 @@ function renderCodeScan() {
   const result = state.codeScan || {};
   const project = currentProject();
   const summary = result.summary || {};
+  const graph = result.code_graph || {};
+  const graphSummary = graph.summary || {};
   const refreshButton = document.querySelector("#refresh-code-scan");
   const statusLabels = {
     ready: "扫描完成",
@@ -230,7 +232,7 @@ function renderCodeScan() {
     not_directory: "路径不是目录",
   };
   document.querySelector("#code-scan-meta").textContent = result.status === "ready"
-    ? `${Number(summary.files_scanned || 0)} 个文件 · ${Number(summary.component_count || 0)} 个组件 · ${result.scanned_at || "刚刚"}`
+    ? `${graph.adapter_label || "通用 Python"} · ${Number(summary.files_scanned || 0)} 个文件 · ${Number(summary.component_count || 0)} 个组件`
     : statusLabels[result.status] || "等待接入代码目录";
   refreshButton.textContent = result.status === "ready" ? "重新扫描" : "扫描代码";
   refreshButton.disabled = state.busy || !project?.code_path;
@@ -265,7 +267,9 @@ function renderCodeScan() {
               <article>
                 <code>${escapeHtml(item.path)}:${Number(item.line || 1)}</code>
                 <strong>${escapeHtml(item.name)}</strong>
-                <span>${escapeHtml(item.kind)} · 置信 ${Number(item.confidence || 0)}</span>
+                <span>${item.kind === "config"
+                  ? escapeHtml(item.config_key || "配置")
+                  : `${escapeHtml(item.registry || item.kind)}${item.interface?.parameters?.length ? ` · forward(${item.interface.parameters.map(escapeHtml).join(", ")})` : ""}`}</span>
               </article>
             `).join("")}
           </div>
@@ -294,7 +298,24 @@ function renderCodeScan() {
     </section>
     <section class="code-framework-strip">
       <span>技术栈</span>
-      <div>${(result.frameworks || []).map((item) => `<b>${escapeHtml(item)}</b>`).join("") || "<b>未识别</b>"}</div>
+      <div><b class="adapter-badge">${escapeHtml(graph.adapter_label || "通用 Python")}</b>${(result.frameworks || []).map((item) => `<b>${escapeHtml(item)}</b>`).join("") || "<b>未识别</b>"}</div>
+    </section>
+    <section class="code-graph-section">
+      <header>
+        <div><span>框架代码图</span><strong>配置 → 注册类型 → 源码接口</strong></div>
+        <small>${Number(graphSummary.link_count || 0)} 条链接 · ${Number(graphSummary.interface_count || 0)} 个接口 · ${Number(graphSummary.unresolved_count || 0)} 个未解析</small>
+      </header>
+      <div class="code-graph-links">
+        ${(graph.links || []).slice(0, 12).map((item) => `
+          <article>
+            <span>${escapeHtml(AREA_MARKS[item.area] || "CF")}</span>
+            <div><strong>${escapeHtml(item.type)}</strong><code>${escapeHtml(item.config_path)} · ${escapeHtml(item.config_key)}</code></div>
+            <b>→</b>
+            <div><strong>${escapeHtml(item.symbol)}</strong><code>${escapeHtml(item.source_path)}:${Number(item.source_line || 1)}</code></div>
+            <small>${escapeHtml(item.registry || "直接构建")} · ${Number(item.confidence || 0)}</small>
+          </article>
+        `).join("") || '<p class="code-empty-note">尚未形成配置到源码的精确链接。</p>'}
+      </div>
     </section>
     <section class="code-map-section">
       <header><div><span>组件定位</span><strong>按训练管线组织</strong></div><small>仅展示文件、符号与行号</small></header>
@@ -763,7 +784,7 @@ function renderSynthesis() {
         <span>代码映射</span>
         <strong>${codeContext.status === "ready" ? escapeHtml(codeContext.repository_name || "本地代码工程") : "尚未建立代码地图"}</strong>
         <p>${codeContext.status === "ready"
-          ? `${Number(codeContext.files_scanned || 0)} 个文件 · ${Number(codeContext.component_count || 0)} 个组件 · ${(codeContext.frameworks || []).map(escapeHtml).join(" / ") || "框架未识别"}`
+          ? `${escapeHtml(codeContext.adapter_label || "通用 Python")} · ${Number(codeContext.config_link_count || 0)} 条配置链 · ${Number(codeContext.interface_count || 0)} 个接口 · ${Number(codeContext.unresolved_count || 0)} 个未解析`
           : "综合方案将保留模块级建议，配置并扫描代码后可定位到具体文件。"}</p>
       </div>
       <button class="secondary-button" data-open-code-map type="button">${codeContext.status === "ready" ? "查看代码地图" : "接入代码"}</button>
@@ -846,15 +867,19 @@ function renderSynthesisScheme(scheme, allInBasket) {
         `).join("")}
       </div>
       <section class="scheme-code-map">
-        <div class="scheme-code-heading"><h3>文件级实施清单</h3><span>${(scheme.implementation_map || []).filter((item) => item.status === "mapped").length}/${(scheme.implementation_map || []).length} 已定位</span></div>
+        <div class="scheme-code-heading"><h3>文件级实施清单</h3><span>${(scheme.implementation_map || []).filter((item) => item.status !== "unmapped").length}/${(scheme.implementation_map || []).length} 已定位</span></div>
         <div class="scheme-code-list">
           ${(scheme.implementation_map || []).map((item) => `
             <article class="code-map-${escapeHtml(item.status)}">
-              <span>${item.status === "mapped" ? "已定位" : "待定位"}</span>
+              <span>${item.status === "contract_ready" ? "契约就绪" : item.status === "mapped" ? "已定位" : "待定位"}</span>
               <div>
-                <strong>${escapeHtml(item.module)}</strong>
-                ${item.target ? `<code>${escapeHtml(item.target.path)}:${Number(item.target.line || 1)} · ${escapeHtml(item.target.name)}</code>` : ""}
+                <header><strong>${escapeHtml(item.module)}</strong><small>映射置信度 ${Number(item.mapping_confidence || 0)}</small></header>
+                ${item.target ? `<code>源码 ${escapeHtml(item.target.path)}:${Number(item.target.line || 1)} · ${escapeHtml(item.target.name)}${item.target.registry ? ` · ${escapeHtml(item.target.registry)}` : ""}</code>` : ""}
+                ${item.config_target ? `<code>配置 ${escapeHtml(item.config_target.path)} · ${escapeHtml(item.config_target.config_key)}${item.config_target.configured_type ? ` · type=${escapeHtml(item.config_target.configured_type)}` : ""}</code>` : ""}
                 <p>${escapeHtml(item.action)}</p>
+                ${(item.contract_checks || []).length ? `<div class="contract-checks">${item.contract_checks.map((check) => `<span>${escapeHtml(check)}</span>`).join("")}</div>` : ""}
+                ${(item.conflicts || []).map((conflict) => `<p class="contract-conflict contract-${escapeHtml(conflict.severity)}">${escapeHtml(conflict.message)}</p>`).join("")}
+                ${(item.change_plan || []).length ? `<details><summary>查看修改步骤</summary><ol>${item.change_plan.map((step) => `<li>${escapeHtml(step)}</li>`).join("")}</ol></details>` : ""}
                 <small>${(item.validation || []).map(escapeHtml).join(" · ")}</small>
               </div>
             </article>

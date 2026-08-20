@@ -9,6 +9,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from auto_paper.arxiv_client import search_arxiv
@@ -34,6 +35,16 @@ from auto_paper.venue_ranker import resolve_venue
 
 ROOT = Path(__file__).resolve().parent.parent
 PUBLIC_DIR = ROOT / "public"
+PROJECT_QUERY_FIELDS = {
+    "domain",
+    "task_type",
+    "idea",
+    "keywords",
+    "backbone",
+    "neck",
+    "head",
+    "dataset",
+}
 
 
 class AutoPaperApp:
@@ -181,11 +192,29 @@ class AutoPaperApp:
                 "config_files": 0,
                 "component_count": 0,
                 "entrypoint_count": 0,
+                "registration_count": 0,
+                "config_link_count": 0,
+                "interface_count": 0,
                 "truncated": False,
             },
             "components": [],
             "entrypoints": [],
             "files_by_area": {},
+            "code_graph": {
+                "adapter": "none",
+                "adapter_label": "未识别",
+                "config_files": [],
+                "registrations": [],
+                "links": [],
+                "unresolved": [],
+                "summary": {
+                    "config_file_count": 0,
+                    "registration_count": 0,
+                    "link_count": 0,
+                    "unresolved_count": 0,
+                    "interface_count": 0,
+                },
+            },
             "warnings": [
                 "请先在项目画像中填写本地代码目录。"
                 if not project.get("code_path")
@@ -612,9 +641,11 @@ def create_handler(app: AutoPaperApp) -> type[BaseHTTPRequestHandler]:
                 if not topic_id:
                     self._json({"error": "missing id"}, HTTPStatus.BAD_REQUEST)
                     return
-                payload = self._read_json()
-                if not payload.get("query"):
-                    payload["query"] = build_project_query(payload)
+                project = app.project(topic_id)
+                if project is None:
+                    self._json({"error": "project not found"}, HTTPStatus.NOT_FOUND)
+                    return
+                payload = _project_update_payload(project, self._read_json())
                 try:
                     project = app.db.update_topic(topic_id, payload)
                     self._json(project)
@@ -716,6 +747,16 @@ def _optional_int(value: str) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _project_update_payload(
+    existing: dict[str, Any],
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    update = dict(payload)
+    if not update.get("query") and PROJECT_QUERY_FIELDS.intersection(update):
+        update["query"] = build_project_query({**existing, **update})
+    return update
 
 
 def _safe_message(error: Exception) -> str:

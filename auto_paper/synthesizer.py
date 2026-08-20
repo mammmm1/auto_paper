@@ -391,6 +391,8 @@ def _limitations(items: list[dict[str, Any]], code_scan: dict[str, Any]) -> list
 
 def _code_context(project: dict[str, Any], code_scan: dict[str, Any]) -> dict[str, Any]:
     summary = code_scan.get("summary") or {}
+    graph = code_scan.get("code_graph") or {}
+    graph_summary = graph.get("summary") or {}
     return {
         "status": code_scan.get("status") or "not_scanned",
         "repository_name": code_scan.get("repository_name") or "",
@@ -401,6 +403,12 @@ def _code_context(project: dict[str, Any], code_scan: dict[str, Any]) -> dict[st
         "areas": code_scan.get("areas") or [],
         "files_scanned": int(summary.get("files_scanned") or 0),
         "component_count": int(summary.get("component_count") or 0),
+        "adapter": graph.get("adapter") or "none",
+        "adapter_label": graph.get("adapter_label") or "未识别",
+        "registration_count": int(graph_summary.get("registration_count") or 0),
+        "config_link_count": int(graph_summary.get("link_count") or 0),
+        "interface_count": int(graph_summary.get("interface_count") or 0),
+        "unresolved_count": int(graph_summary.get("unresolved_count") or 0),
         "entrypoints": code_scan.get("entrypoints") or [],
         "warnings": code_scan.get("warnings") or [],
     }
@@ -411,20 +419,81 @@ def _implementation_map(
     code_scan: dict[str, Any],
 ) -> list[dict[str, Any]]:
     components = code_scan.get("components") or []
+    graph = code_scan.get("code_graph") or {}
+    links = graph.get("links") or []
     mapped = []
     for item in items:
-        candidates = [component for component in components if component.get("area") == item["area"]]
-        target = max(candidates, key=lambda value: _target_score(item, value), default=None)
+        area_links = [link for link in links if link.get("area") == item["area"]]
+        configured_link = max(
+            area_links,
+            key=lambda value: int(value.get("confidence") or 0),
+            default=None,
+        )
+        linked_paths = {link.get("source_path") for link in area_links if link.get("source_path")}
+        candidates = [
+            component
+            for component in components
+            if component.get("area") == item["area"] and component.get("kind") != "config"
+        ]
+        target = None
+        if configured_link:
+            target = next(
+                (
+                    component
+                    for component in candidates
+                    if component.get("path") == configured_link.get("source_path")
+                    and component.get("name") == configured_link.get("symbol")
+                ),
+                None,
+            )
+        target = target or max(
+            candidates,
+            key=lambda value: _target_score(item, value, linked_paths),
+            default=None,
+        )
+        config_candidates = [
+            component
+            for component in components
+            if component.get("area") == item["area"]
+            and component.get("kind") == "config"
+            and component.get("config_key")
+        ]
+        config_target = None
+        if configured_link:
+            config_target = next(
+                (
+                    component
+                    for component in config_candidates
+                    if component.get("path") == configured_link.get("config_path")
+                    and component.get("config_key") == configured_link.get("config_key")
+                ),
+                None,
+            )
+        config_target = config_target or max(
+            config_candidates,
+            key=lambda value: _target_score(item, value, set()),
+            default=None,
+        )
+        interface = (target.get("interface") or {}) if target else {}
+        registry = str(target.get("registry") or "") if target else ""
         if target:
             location = f"{target.get('path')}:{target.get('line', 1)}"
-            action = (
-                f"优先检查 {location} 的 {target.get('name') or '现有实现'}，"
-                f"通过配置开关接入 {item['module']}。"
-            )
-            status = "mapped"
+            if config_target and (interface.get("parameters") or registry):
+                action = (
+                    f"以 {location} 的 {target.get('name') or '现有实现'} 为接口基线，"
+                    f"在 {config_target.get('path')} 的 {config_target.get('config_key')} 切换候选模块。"
+                )
+                status = "contract_ready"
+            else:
+                action = (
+                    f"优先检查 {location} 的 {target.get('name') or '现有实现'}，"
+                    f"通过独立配置开关接入 {item['module']}。"
+                )
+                status = "mapped"
         else:
             action = f"未找到明确的 {item['area']} 实现；先定位注册表或构建函数，再接入 {item['module']}。"
             status = "unmapped"
+        conflicts = _contract_conflicts(item["area"], target, config_target, graph)
         mapped.append(
             {
                 "paper_id": item["paper_id"],
@@ -434,19 +503,52 @@ def _implementation_map(
                 "target": (
                     {
                         key: target.get(key)
-                        for key in ("path", "line", "name", "kind", "confidence")
+                        for key in (
+                            "path",
+                            "line",
+                            "name",
+                            "kind",
+                            "confidence",
+                            "registry",
+                            "registered_name",
+                            "constructor",
+                            "interface",
+                        )
                     }
                     if target
                     else None
                 ),
+                "config_target": (
+                    {
+                        key: config_target.get(key)
+                        for key in (
+                            "path",
+                            "line",
+                            "name",
+                            "config_key",
+                            "configured_type",
+                            "parameters",
+                        )
+                    }
+                    if config_target
+                    else None
+                ),
+                "mapping_confidence": _mapping_confidence(status, target, configured_link),
                 "action": action,
+                "change_plan": _change_plan(item, target, config_target, graph),
+                "contract_checks": _contract_checks(target, config_target),
+                "conflicts": conflicts,
                 "validation": _code_validation(item["area"]),
             }
         )
     return mapped
 
 
-def _target_score(item: dict[str, Any], component: dict[str, Any]) -> float:
+def _target_score(
+    item: dict[str, Any],
+    component: dict[str, Any],
+    linked_paths: set[str],
+) -> float:
     source_tokens = _word_tokens(
         " ".join(
             str(value or "")
@@ -459,7 +561,112 @@ def _target_score(item: dict[str, Any], component: dict[str, Any]) -> float:
             for value in (component.get("name"), component.get("path"), " ".join(component.get("signals") or []))
         )
     )
-    return float(component.get("confidence") or 0) + len(source_tokens.intersection(target_tokens)) * 12
+    configured_bonus = 35 if component.get("path") in linked_paths else 0
+    interface_bonus = 8 if (component.get("interface") or {}).get("parameters") else 0
+    registry_bonus = 8 if component.get("registry") else 0
+    return (
+        float(component.get("confidence") or 0)
+        + len(source_tokens.intersection(target_tokens)) * 12
+        + configured_bonus
+        + interface_bonus
+        + registry_bonus
+    )
+
+
+def _mapping_confidence(
+    status: str,
+    target: dict[str, Any] | None,
+    configured_link: dict[str, Any] | None,
+) -> int:
+    if status == "unmapped":
+        return 0
+    if configured_link:
+        return min(98, int(configured_link.get("confidence") or 88))
+    return min(82, int((target or {}).get("confidence") or 60))
+
+
+def _change_plan(
+    item: dict[str, Any],
+    target: dict[str, Any] | None,
+    config_target: dict[str, Any] | None,
+    graph: dict[str, Any],
+) -> list[str]:
+    if not target:
+        return [f"定位 {item['area']} 的注册表、构建函数或配置入口。"]
+    steps = [
+        f"以 {target.get('path')}:{target.get('line', 1)} 的 {target.get('name')} 作为兼容接口基线。"
+    ]
+    registry = str(target.get("registry") or "")
+    if registry:
+        steps.append(f"为新模块使用 {registry}.register_module 注册独立类型名。")
+    elif graph.get("adapter") == "mmdetection":
+        steps.append("确认新模块进入 MMDetection MODELS 注册表，避免直接修改现有类。")
+    if config_target:
+        steps.append(
+            f"复制实验配置，在 {config_target.get('path')} 的 {config_target.get('config_key')}.type 切换新类型。"
+        )
+    else:
+        steps.append("新增独立实验配置开关，保留当前实现作为基线。")
+    steps.append("保持原接口与默认参数可回退，再运行最小烟雾测试。")
+    return steps
+
+
+def _contract_checks(
+    target: dict[str, Any] | None,
+    config_target: dict[str, Any] | None,
+) -> list[str]:
+    checks = []
+    if target:
+        interface = target.get("interface") or {}
+        parameters = interface.get("parameters") or []
+        returns = interface.get("returns") or []
+        if parameters:
+            checks.append(
+                f"forward({', '.join(parameters)})"
+                + (f" -> {' / '.join(returns)}" if returns else "")
+            )
+        if target.get("registry"):
+            checks.append(
+                f"注册表 {target['registry']} · 类型 {target.get('registered_name') or target.get('name')}"
+            )
+    if config_target:
+        parameters = config_target.get("parameters") or {}
+        important = {
+            key: value
+            for key, value in parameters.items()
+            if key in {"in_channels", "out_channels", "num_outs", "out_indices", "num_classes", "strides"}
+        }
+        checks.append(f"配置键 {config_target.get('config_key')}")
+        if important:
+            checks.append(json.dumps(important, ensure_ascii=False, separators=(",", ":")))
+    return checks
+
+
+def _contract_conflicts(
+    area: str,
+    target: dict[str, Any] | None,
+    config_target: dict[str, Any] | None,
+    graph: dict[str, Any],
+) -> list[dict[str, str]]:
+    conflicts = []
+    if not target:
+        return [{"severity": "warning", "message": "缺少源码实现定位，无法核验输入输出契约。"}]
+    interface = target.get("interface") or {}
+    if area in {"Backbone", "Neck", "Head"} and not interface.get("parameters"):
+        conflicts.append({"severity": "warning", "message": "未解析到 forward 参数，需要人工确认调用签名。"})
+    if graph.get("adapter") == "mmdetection" and not target.get("registry"):
+        conflicts.append({"severity": "warning", "message": "目标类未发现 MMEngine 注册装饰器，配置 type 可能无法构建。"})
+    parameters = (config_target or {}).get("parameters") or {}
+    in_channels = parameters.get("in_channels")
+    num_outs = parameters.get("num_outs")
+    if isinstance(in_channels, list) and isinstance(num_outs, int) and num_outs < len(in_channels):
+        conflicts.append(
+            {
+                "severity": "warning",
+                "message": f"num_outs={num_outs} 小于输入特征层数量 {len(in_channels)}，需要核对尺度输出。",
+            }
+        )
+    return conflicts
 
 
 def _word_tokens(value: str) -> set[str]:

@@ -1724,6 +1724,110 @@ a.venue-rank:hover {
   font-size: 8px;
 }
 
+.code-framework-strip b.adapter-badge {
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+.code-graph-section {
+  border-bottom: 1px solid var(--line);
+  padding: 17px 0;
+}
+
+.code-graph-section > header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.code-graph-section > header > div {
+  display: grid;
+  gap: 3px;
+}
+
+.code-graph-section > header span {
+  color: var(--blue);
+  font-size: 9px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.code-graph-section > header strong {
+  font-size: 13px;
+}
+
+.code-graph-section > header small {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.code-graph-links {
+  display: grid;
+  gap: 1px;
+  margin-top: 11px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--line);
+}
+
+.code-graph-links article {
+  min-width: 0;
+  min-height: 52px;
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) 18px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 9px;
+  background: var(--surface);
+}
+
+.code-graph-links article > span {
+  width: 27px;
+  height: 25px;
+  display: grid;
+  place-items: center;
+  border-radius: 5px;
+  background: #232d3a;
+  color: #ffffff;
+  font-size: 8px;
+  font-weight: 900;
+}
+
+.code-graph-links article > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.code-graph-links article strong,
+.code-graph-links article code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.code-graph-links article strong {
+  font-size: 9px;
+}
+
+.code-graph-links article code {
+  color: #4b5a6e;
+  font-size: 8px;
+}
+
+.code-graph-links article > b {
+  color: var(--line-strong);
+  font-size: 13px;
+}
+
+.code-graph-links article > small {
+  color: var(--muted);
+  font-size: 8px;
+  white-space: nowrap;
+}
+
 .code-map-section {
   border-bottom: 1px solid var(--line);
   padding: 17px 0;
@@ -1837,8 +1941,11 @@ a.venue-rank:hover {
 }
 
 .code-component-list span {
+  max-width: 190px;
+  overflow: hidden;
   color: var(--muted);
   font-size: 8px;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
@@ -2470,10 +2577,33 @@ details.synthesis-section > summary > small {
   color: var(--amber);
 }
 
+.scheme-code-list article.code-map-mapped > span {
+  background: var(--blue-soft);
+  color: var(--blue);
+}
+
+.scheme-code-list article.code-map-contract_ready > span {
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
 .scheme-code-list article > div {
   min-width: 0;
   display: grid;
   gap: 3px;
+}
+
+.scheme-code-list article > div > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.scheme-code-list article > div > header small {
+  color: var(--muted);
+  font-size: 8px;
+  white-space: nowrap;
 }
 
 .scheme-code-list strong {
@@ -2495,6 +2625,60 @@ details.synthesis-section > summary > small {
 
 .scheme-code-list small {
   color: var(--muted);
+}
+
+.contract-checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 2px;
+}
+
+.contract-checks span {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  border-radius: 4px;
+  padding: 3px 5px;
+  background: #eef3f8;
+  color: #42546b;
+  font-size: 8px;
+}
+
+.scheme-code-list p.contract-conflict {
+  border-left: 2px solid var(--amber);
+  padding-left: 7px;
+  color: #79521a;
+}
+
+.scheme-code-list p.contract-info {
+  border-left-color: var(--blue);
+  color: #345b91;
+}
+
+.scheme-code-list details {
+  margin-top: 2px;
+  border-top: 1px solid var(--line);
+  padding-top: 5px;
+}
+
+.scheme-code-list details summary {
+  color: var(--blue);
+  cursor: pointer;
+  font-size: 8px;
+  font-weight: 800;
+}
+
+.scheme-code-list details ol {
+  display: grid;
+  gap: 4px;
+  margin: 6px 0 0;
+  padding-left: 17px;
+}
+
+.scheme-code-list details li {
+  color: #4c596b;
+  font-size: 8px;
+  line-height: 1.45;
 }
 
 .scheme-plan-grid,
@@ -3319,6 +3503,7 @@ details.synthesis-section > summary > small {
   }
 
   .code-map-section > header,
+  .code-graph-section > header,
   .synthesis-code-context {
     align-items: stretch;
     flex-direction: column;
@@ -3347,6 +3532,23 @@ details.synthesis-section > summary > small {
   .code-component-list span {
     grid-column: 2;
     grid-row: 1 / span 2;
+  }
+
+  .code-graph-links article {
+    grid-template-columns: 28px minmax(0, 1fr);
+  }
+
+  .code-graph-links article > b {
+    display: none;
+  }
+
+  .code-graph-links article > div:nth-of-type(2),
+  .code-graph-links article > small {
+    grid-column: 2;
+  }
+
+  .code-graph-links article > small {
+    white-space: normal;
   }
 
   .synthesis-code-context p {
@@ -3430,6 +3632,12 @@ details.synthesis-section > summary > small {
   .scheme-detail > footer {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .scheme-code-list article > div > header {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 3px;
   }
 
   .scheme-detail > footer .primary-button {

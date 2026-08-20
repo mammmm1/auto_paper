@@ -22,6 +22,7 @@ from auto_paper.profile_validator import validate_project_profile
 from auto_paper.quality import build_quality_metrics, rank_materials
 from auto_paper.recommender import score_paper
 from auto_paper.route_builder import build_experiment_route
+from auto_paper.server import _project_update_payload
 from auto_paper.summarizer import summarize_paper
 from auto_paper.synthesizer import build_research_synthesis
 from auto_paper.venue_ranker import resolve_venue
@@ -118,6 +119,20 @@ class VenueRankerTests(unittest.TestCase):
 
 
 class DatabaseTests(unittest.TestCase):
+    def test_code_only_project_update_preserves_search_query(self):
+        existing = {
+            "query": "cat:cs.CV AND all:transformer",
+            "domain": "遥感图像",
+            "task_type": "目标检测",
+        }
+
+        code_update = _project_update_payload(existing, {"code_path": "D:/work/model"})
+        profile_update = _project_update_payload(existing, {"task_type": "语义分割"})
+
+        self.assertNotIn("query", code_update)
+        self.assertIn('all:"remote sensing"', profile_update["query"])
+        self.assertIn('all:"semantic segmentation"', profile_update["query"])
+
     def test_persists_code_profile_and_invalidates_scan_when_path_changes(self):
         with tempfile.TemporaryDirectory() as directory:
             db = Database(Path(directory) / "test.sqlite3")
@@ -259,7 +274,7 @@ class SynthesisTests(unittest.TestCase):
             "repository_name": "model",
             "frameworks": ["PyTorch"],
             "areas": ["Neck"],
-            "summary": {"files_scanned": 12, "component_count": 1},
+            "summary": {"files_scanned": 12, "component_count": 2},
             "components": [
                 {
                     "area": "Neck",
@@ -269,7 +284,16 @@ class SynthesisTests(unittest.TestCase):
                     "line": 18,
                     "confidence": 91,
                     "signals": ["neck", "fpn"],
-                }
+                },
+                {
+                    "area": "Neck",
+                    "kind": "config",
+                    "name": "neck",
+                    "path": "configs/model.json",
+                    "line": 1,
+                    "confidence": 70,
+                    "signals": ["neck"],
+                },
             ],
             "entrypoints": [],
             "warnings": [],
@@ -284,8 +308,83 @@ class SynthesisTests(unittest.TestCase):
         implementation = result["schemes"][0]["implementation_map"][0]
         self.assertEqual(implementation["status"], "mapped")
         self.assertEqual(implementation["target"]["path"], "models/necks/fpn.py")
+        self.assertIsNone(implementation["config_target"])
         self.assertEqual(result["code_context"]["files_scanned"], 12)
         self.assertTrue(any("只读静态扫描" in item for item in result["limitations"]))
+
+    def test_builds_contract_ready_plan_from_framework_graph(self):
+        code_scan = {
+            "status": "ready",
+            "summary": {"files_scanned": 20, "component_count": 2},
+            "components": [
+                {
+                    "area": "Neck",
+                    "kind": "class",
+                    "name": "FPN",
+                    "path": "mmdet/models/necks/fpn.py",
+                    "line": 20,
+                    "confidence": 94,
+                    "signals": ["neck", "fpn"],
+                    "registry": "MODELS",
+                    "registered_name": "",
+                    "constructor": {"parameters": ["in_channels", "out_channels"], "defaults": {}},
+                    "interface": {"parameters": ["inputs"], "returns": ["tuple"], "line": 80},
+                },
+                {
+                    "area": "Neck",
+                    "kind": "config",
+                    "name": "FPN",
+                    "path": "configs/model.py",
+                    "line": 2,
+                    "confidence": 92,
+                    "signals": ["python config", "model.neck"],
+                    "config_key": "model.neck",
+                    "configured_type": "FPN",
+                    "parameters": {
+                        "in_channels": [96, 192, 384, 768],
+                        "out_channels": 256,
+                        "num_outs": 5,
+                    },
+                },
+            ],
+            "code_graph": {
+                "adapter": "mmdetection",
+                "adapter_label": "MMDetection / MMEngine",
+                "links": [
+                    {
+                        "area": "Neck",
+                        "type": "FPN",
+                        "config_path": "configs/model.py",
+                        "config_key": "model.neck",
+                        "source_path": "mmdet/models/necks/fpn.py",
+                        "source_line": 20,
+                        "symbol": "FPN",
+                        "registry": "MODELS",
+                        "confidence": 95,
+                    }
+                ],
+                "summary": {
+                    "registration_count": 1,
+                    "link_count": 1,
+                    "interface_count": 1,
+                    "unresolved_count": 0,
+                },
+            },
+        }
+
+        result = build_research_synthesis(
+            {"id": 1, "name": "项目"},
+            [self._material(1, "Neck", "Feature Fusion", "中", 90, 84)],
+            code_scan,
+        )
+
+        implementation = result["schemes"][0]["implementation_map"][0]
+        self.assertEqual(implementation["status"], "contract_ready")
+        self.assertEqual(implementation["config_target"]["config_key"], "model.neck")
+        self.assertEqual(implementation["mapping_confidence"], 95)
+        self.assertIn("forward(inputs) -> tuple", implementation["contract_checks"])
+        self.assertEqual(implementation["conflicts"], [])
+        self.assertEqual(result["code_context"]["adapter"], "mmdetection")
 
     @staticmethod
     def _material(
@@ -332,6 +431,29 @@ class SynthesisTests(unittest.TestCase):
 
 
 class CodeScannerTests(unittest.TestCase):
+    def test_resolves_mmdetection_config_registry_and_forward_contract(self):
+        root = Path(__file__).parent / "fixtures" / "mmdet_project"
+
+        result = scan_codebase(str(root))
+
+        graph = result["code_graph"]
+        component = next(
+            item
+            for item in result["components"]
+            if item["name"] == "ScaleBiasUnit" and item["kind"] == "class"
+        )
+        link = next(item for item in graph["links"] if item["type"] == "ScaleBiasUnit")
+        self.assertEqual(graph["adapter"], "mmdetection")
+        self.assertEqual(component["registry"], "MODELS")
+        self.assertEqual(component["constructor"]["defaults"]["num_outs"], 5)
+        self.assertEqual(component["interface"]["parameters"], ["inputs"])
+        self.assertIn("tuple", component["interface"]["returns"])
+        self.assertEqual(link["config_key"], "model.neck")
+        self.assertEqual(component["area"], "Neck")
+        self.assertIn("registered config", component["signals"])
+        self.assertEqual(link["source_path"], "projects/scale_bias.py")
+        self.assertEqual(graph["config_files"][0]["bases"], ["./faster-rcnn_r50_fpn.py"])
+
     def test_builds_component_map_and_ignores_artifact_directories(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

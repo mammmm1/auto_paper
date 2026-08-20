@@ -18,7 +18,8 @@
 - 深度缝合分析：为单张或 Top 10 素材生成模块接口、最小实现、对照实验、风险、证据与置信度。
 - 跨论文综合：把 Top 10 转成能力对比矩阵、兼容关系和保守 / 平衡 / 探索三档实验方案，并可一键加入方案篮。
 - 代码结构地图：只读扫描本地 Python 工程，识别训练框架、Backbone / Neck / Head / Loss / Data / Training、配置与运行入口。
-- 文件级实施清单：把综合方案映射到候选文件、类或函数与行号，同时列出接口验证和烟雾测试要求；不直接修改业务代码。
+- 框架代码图：为 MMDetection / MMEngine 与纯 PyTorch 解析配置继承、注册类型、构造参数、`forward` 契约，以及配置到源码的链接。
+- 文件级实施清单：区分待定位、已定位与契约就绪，展示源码、配置键、接口检查、冲突提示和修改步骤；不直接修改业务代码。
 - 双通道分析：默认使用本地规则；配置 OpenAI 后通过 Responses API 和严格 JSON Schema 生成，并按论文、画像与模型指纹缓存。
 - 全文证据：下载并缓存 PDF，提取方法、实验、消融、数据与结论段落，记录具体页码。
 - 代码核验：从正文和 PDF 链接中发现 GitHub / GitLab / Hugging Face / Bitbucket 地址，并区分已验证、仅报告和未发现。
@@ -77,6 +78,7 @@ python -m auto_paper.server --host 0.0.0.0 --port 8000
 auto_paper/
   arxiv_client.py    # arXiv 搜索
   code_scanner.py    # 本地代码结构与训练组件静态扫描
+  framework_analyzer.py # MMDetection/PyTorch 配置、注册器与接口代码图
   database.py        # SQLite 表结构和读写
   deep_analyzer.py   # 规则/OpenAI 结构化深度缝合分析
   evidence_extractor.py # PDF 缓存、全文片段与代码仓库核验
@@ -105,4 +107,4 @@ public/
 1. 持续标注固定 Top 10，用真实反馈校准四级阈值与排序权重。
 2. 增加 OCR、架构图和实验表格解析，补齐当前纯文本提取的证据边界。
 3. 扩展 Semantic Scholar 与 Papers with Code，交叉验证引用和代码仓库。
-4. 增加框架专用适配器，进一步解析注册表、配置继承与张量接口，并生成可审查补丁。
+4. 增加受控运行时形状探针和可审查补丁预览，把静态契约升级为真实张量与导入验证。
