@@ -68,7 +68,10 @@
       <section class="project-band">
         <div id="profile-summary" class="profile-summary"></div>
         <div id="profile-check" class="profile-check"></div>
-        <button id="edit-project" class="secondary-button" type="button">编辑画像</button>
+        <div class="project-actions">
+          <button id="open-code-map" class="secondary-button" type="button">代码地图</button>
+          <button id="edit-project" class="secondary-button" type="button">编辑画像</button>
+        </div>
       </section>
 
       <section class="insight-band">
@@ -128,6 +131,22 @@
       </div>
       <div id="basket-items" class="basket-items"></div>
       <div id="route-result" class="route-result"></div>
+    </aside>
+
+    <div id="code-overlay" class="drawer-overlay" hidden></div>
+    <aside id="code-drawer" class="code-drawer" hidden aria-label="代码结构地图">
+      <header class="drawer-header code-header">
+        <div>
+          <span>Repository Map</span>
+          <h2>代码结构地图</h2>
+          <p id="code-scan-meta">等待接入代码目录</p>
+        </div>
+        <div class="drawer-header-actions">
+          <button id="refresh-code-scan" class="primary-button" type="button">扫描代码</button>
+          <button id="close-code-map" class="icon-button" type="button" title="关闭代码地图" aria-label="关闭代码地图">×</button>
+        </div>
+      </header>
+      <div id="code-scan-content" class="code-scan-content"></div>
     </aside>
 
     <div id="analysis-overlay" class="drawer-overlay" hidden></div>
@@ -208,6 +227,14 @@
           <label>
             Dataset
             <input name="dataset" placeholder="DOTA / DIOR" />
+          </label>
+          <label class="field-wide">
+            本地代码目录
+            <input name="code_path" placeholder="D:\projects\remote-sensing-model" />
+          </label>
+          <label class="field-wide">
+            代码仓库地址
+            <input name="code_repo_url" type="url" placeholder="https://github.com/user/model" />
           </label>
           <label>
             每次搜索数量

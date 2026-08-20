@@ -8,6 +8,7 @@ const state = {
   viewMode: "top",
   areaFilter: "all",
   route: null,
+  codeScan: null,
   synthesis: null,
   activeSynthesisSchemeId: "balanced",
   activeAnalysisPaperId: null,
@@ -53,6 +54,9 @@ const qualityMetricsEl = document.querySelector("#quality-metrics");
 const analysisDrawerEl = document.querySelector("#analysis-drawer");
 const analysisOverlayEl = document.querySelector("#analysis-overlay");
 const analysisContentEl = document.querySelector("#analysis-content");
+const codeDrawerEl = document.querySelector("#code-drawer");
+const codeOverlayEl = document.querySelector("#code-overlay");
+const codeScanContentEl = document.querySelector("#code-scan-content");
 const synthesisDrawerEl = document.querySelector("#synthesis-drawer");
 const synthesisOverlayEl = document.querySelector("#synthesis-overlay");
 const synthesisContentEl = document.querySelector("#synthesis-content");
@@ -69,6 +73,8 @@ function setBusy(busy) {
   document.querySelectorAll("[data-stage]").forEach((button) => {
     button.disabled = busy;
   });
+  document.querySelector("#open-code-map").disabled = busy;
+  document.querySelector("#refresh-code-scan").disabled = busy;
   document.body.toggleAttribute("aria-busy", busy);
 }
 
@@ -123,6 +129,17 @@ async function loadProfileCheck() {
   renderProfileCheck();
 }
 
+async function loadCodeScan() {
+  if (!state.currentProjectId) {
+    state.codeScan = null;
+    renderCodeScan();
+    return;
+  }
+  state.codeScan = await api(`/api/code-scan?topic_id=${state.currentProjectId}`);
+  renderCodeScan();
+  renderProfileSummary();
+}
+
 function currentProject() {
   return state.projects.find((project) => project.id === state.currentProjectId) || null;
 }
@@ -173,6 +190,12 @@ function renderProfileSummary() {
       <span>${escapeHtml(project.dataset || "Dataset 未设置")}</span>
     </div>
   `;
+  const codeButton = document.querySelector("#open-code-map");
+  if (state.codeScan?.status === "ready") {
+    codeButton.textContent = `代码地图 ${Number(state.codeScan.summary?.component_count || 0)}`;
+  } else {
+    codeButton.textContent = project.code_path ? "扫描代码" : "接入代码";
+  }
 }
 
 function renderProfileCheck() {
@@ -190,6 +213,100 @@ function renderProfileCheck() {
       <strong>${escapeHtml(labels[check.status] || "画像检查")} · ${Number(check.readiness_score || 0)}</strong>
       <p>${escapeHtml(important?.message || check.summary)}</p>
     </div>
+  `;
+}
+
+function renderCodeScan() {
+  const result = state.codeScan || {};
+  const project = currentProject();
+  const summary = result.summary || {};
+  const refreshButton = document.querySelector("#refresh-code-scan");
+  const statusLabels = {
+    ready: "扫描完成",
+    empty: "目录为空",
+    not_scanned: "等待扫描",
+    not_configured: "尚未接入",
+    not_found: "目录不可用",
+    not_directory: "路径不是目录",
+  };
+  document.querySelector("#code-scan-meta").textContent = result.status === "ready"
+    ? `${Number(summary.files_scanned || 0)} 个文件 · ${Number(summary.component_count || 0)} 个组件 · ${result.scanned_at || "刚刚"}`
+    : statusLabels[result.status] || "等待接入代码目录";
+  refreshButton.textContent = result.status === "ready" ? "重新扫描" : "扫描代码";
+  refreshButton.disabled = state.busy || !project?.code_path;
+
+  if (result.status !== "ready") {
+    codeScanContentEl.innerHTML = `
+      <section class="code-empty-state">
+        <span>${escapeHtml(statusLabels[result.status] || "代码地图")}</span>
+        <strong>${project?.code_path ? "当前目录尚未生成代码地图" : "为项目绑定本地代码目录"}</strong>
+        <p>${escapeHtml(result.warnings?.[0] || "保存目录后即可执行只读静态扫描。")}</p>
+        ${project?.code_path
+          ? `<code>${escapeHtml(project.code_path)}</code><button class="primary-button" data-code-action="scan" type="button">开始扫描</button>`
+          : '<button class="primary-button" data-code-action="edit" type="button">编辑项目画像</button>'}
+      </section>
+    `;
+    return;
+  }
+
+  const components = result.components || [];
+  const areaSections = AREAS
+    .map((area) => {
+      const matches = components.filter((item) => item.area === area);
+      if (!matches.length) return "";
+      return `
+        <section class="code-area-group">
+          <header>
+            <span>${escapeHtml(AREA_MARKS[area] || area.slice(0, 2))}</span>
+            <div><strong>${escapeHtml(AREA_LABELS[area] || area)}</strong><small>${matches.length} 个定位点</small></div>
+          </header>
+          <div class="code-component-list">
+            ${matches.slice(0, 12).map((item) => `
+              <article>
+                <code>${escapeHtml(item.path)}:${Number(item.line || 1)}</code>
+                <strong>${escapeHtml(item.name)}</strong>
+                <span>${escapeHtml(item.kind)} · 置信 ${Number(item.confidence || 0)}</span>
+              </article>
+            `).join("")}
+          </div>
+        </section>
+      `;
+    })
+    .join("");
+  const repositoryLink = result.repository_url
+    ? `<a href="${safeExternalUrl(result.repository_url)}" target="_blank" rel="noreferrer">打开远端仓库</a>`
+    : "";
+
+  codeScanContentEl.innerHTML = `
+    <section class="code-scan-overview">
+      <div>
+        <span>本地仓库</span>
+        <strong>${escapeHtml(result.repository_name || "代码工程")}</strong>
+        <code>${escapeHtml(result.root || "")}</code>
+        ${repositoryLink}
+      </div>
+      <dl>
+        <div><dt>文件</dt><dd>${Number(summary.files_scanned || 0)}</dd></div>
+        <div><dt>组件</dt><dd>${Number(summary.component_count || 0)}</dd></div>
+        <div><dt>入口</dt><dd>${Number(summary.entrypoint_count || 0)}</dd></div>
+        <div><dt>区域</dt><dd>${(result.areas || []).length}</dd></div>
+      </dl>
+    </section>
+    <section class="code-framework-strip">
+      <span>技术栈</span>
+      <div>${(result.frameworks || []).map((item) => `<b>${escapeHtml(item)}</b>`).join("") || "<b>未识别</b>"}</div>
+    </section>
+    <section class="code-map-section">
+      <header><div><span>组件定位</span><strong>按训练管线组织</strong></div><small>仅展示文件、符号与行号</small></header>
+      <div class="code-area-list">${areaSections || '<p class="code-empty-note">当前未识别到训练组件。</p>'}</div>
+    </section>
+    <section class="code-entrypoints">
+      <header><strong>运行入口</strong><span>${(result.entrypoints || []).length}</span></header>
+      ${(result.entrypoints || []).map((item) => `<p><code>${escapeHtml(item.path)}:${Number(item.line || 1)}</code><span>${escapeHtml(item.name)}</span></p>`).join("") || "<p>未识别到明确的训练或评估入口。</p>"}
+    </section>
+    ${(result.warnings || []).length ? `
+      <footer class="code-scan-warnings"><strong>扫描边界</strong>${result.warnings.map((item) => `<p>${escapeHtml(item)}</p>`).join("")}</footer>
+    ` : ""}
   `;
 }
 
@@ -493,6 +610,7 @@ function openAnalysisDrawer(material, result) {
   const analysis = result.analysis;
   if (!analysis) return;
   closeBasketDrawer();
+  closeCodeDrawer();
   closeSynthesisDrawer();
   state.activeAnalysisPaperId = material.id;
   const sourceLabels = {
@@ -589,6 +707,7 @@ function renderAnalysisList(title, items = []) {
 
 function openSynthesisDrawer(result) {
   closeBasketDrawer();
+  closeCodeDrawer();
   closeAnalysisDrawer();
   state.synthesis = result;
   state.activeSynthesisSchemeId = result.recommendation?.primary_scheme_id || "balanced";
@@ -605,6 +724,7 @@ function renderSynthesis() {
     return;
   }
   const coverage = result.coverage || {};
+  const codeContext = result.code_context || {};
   const schemes = result.schemes || [];
   const activeScheme = schemes.find((item) => item.id === state.activeSynthesisSchemeId)
     || schemes[0];
@@ -636,6 +756,17 @@ function renderSynthesis() {
         <div><dt>分析</dt><dd>${Number(coverage.analyzed_count || 0)}</dd></div>
         <div><dt>代码</dt><dd>${Number(coverage.code_count || 0)}</dd></div>
       </dl>
+    </section>
+
+    <section class="synthesis-code-context ${codeContext.status === "ready" ? "code-ready" : "code-pending"}">
+      <div>
+        <span>代码映射</span>
+        <strong>${codeContext.status === "ready" ? escapeHtml(codeContext.repository_name || "本地代码工程") : "尚未建立代码地图"}</strong>
+        <p>${codeContext.status === "ready"
+          ? `${Number(codeContext.files_scanned || 0)} 个文件 · ${Number(codeContext.component_count || 0)} 个组件 · ${(codeContext.frameworks || []).map(escapeHtml).join(" / ") || "框架未识别"}`
+          : "综合方案将保留模块级建议，配置并扫描代码后可定位到具体文件。"}</p>
+      </div>
+      <button class="secondary-button" data-open-code-map type="button">${codeContext.status === "ready" ? "查看代码地图" : "接入代码"}</button>
     </section>
 
     <details class="synthesis-section synthesis-comparison" open>
@@ -714,6 +845,22 @@ function renderSynthesisScheme(scheme, allInBasket) {
           <article><b>${index + 1}</b><span>${escapeHtml(item.area)}</span><div><strong>${escapeHtml(item.module)}</strong><p>${escapeHtml(item.title)}</p></div><small>${escapeHtml(item.difficulty)} · ${Number(item.score || 0).toFixed(1)}</small></article>
         `).join("")}
       </div>
+      <section class="scheme-code-map">
+        <div class="scheme-code-heading"><h3>文件级实施清单</h3><span>${(scheme.implementation_map || []).filter((item) => item.status === "mapped").length}/${(scheme.implementation_map || []).length} 已定位</span></div>
+        <div class="scheme-code-list">
+          ${(scheme.implementation_map || []).map((item) => `
+            <article class="code-map-${escapeHtml(item.status)}">
+              <span>${item.status === "mapped" ? "已定位" : "待定位"}</span>
+              <div>
+                <strong>${escapeHtml(item.module)}</strong>
+                ${item.target ? `<code>${escapeHtml(item.target.path)}:${Number(item.target.line || 1)} · ${escapeHtml(item.target.name)}</code>` : ""}
+                <p>${escapeHtml(item.action)}</p>
+                <small>${(item.validation || []).map(escapeHtml).join(" · ")}</small>
+              </div>
+            </article>
+          `).join("") || '<p class="synthesis-empty-note">扫描代码后生成文件级实施清单。</p>'}
+        </div>
+      </section>
       <div class="scheme-plan-grid">
         <section><h3>实施步骤</h3><ol>${(scheme.implementation_steps || []).map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ol></section>
         <section><h3>实验序列</h3><ol>${(scheme.experiments || []).map((item) => `<li><strong>${escapeHtml(item.name)}</strong><p>${escapeHtml(item.change)}</p></li>`).join("")}</ol></section>
@@ -795,12 +942,48 @@ async function executeAnalysis() {
 
 async function executeSynthesis() {
   renderWorkflowState("synthesis");
+  if (currentProject()?.code_path && state.codeScan?.status !== "ready") {
+    setStatus("正在扫描项目代码并建立组件地图...");
+    await executeCodeScan();
+  }
   setStatus("正在比较 Top 10 并生成三档实验方案...");
   const result = await api(`/api/synthesis?topic_id=${state.currentProjectId}`, { method: "POST" });
   openSynthesisDrawer(result);
   renderWorkflowState();
   setStatus(`综合完成：${result.material_count} 张素材，${result.schemes?.length || 0} 套方案`);
   return result;
+}
+
+async function executeCodeScan() {
+  const result = await api(`/api/code-scan?topic_id=${state.currentProjectId}`, { method: "POST" });
+  state.codeScan = result;
+  state.synthesis = null;
+  renderCodeScan();
+  renderProfileSummary();
+  return result;
+}
+
+async function runCodeScan() {
+  if (state.busy) return;
+  if (!currentProject()?.code_path) {
+    openProfileDialog("edit");
+    setStatus("请先填写本地代码目录");
+    return;
+  }
+  try {
+    setBusy(true);
+    setStatus("正在只读扫描代码结构...");
+    const result = await executeCodeScan();
+    openCodeDrawer();
+    setStatus(result.status === "ready"
+      ? `代码扫描完成：${result.summary?.component_count || 0} 个组件`
+      : `代码扫描未完成：${result.warnings?.[0] || result.status}`);
+  } catch (error) {
+    setStatus(`代码扫描失败：${error.message}`);
+  } finally {
+    setBusy(false);
+    renderCodeScan();
+  }
 }
 
 async function runStage(stage) {
@@ -877,6 +1060,7 @@ async function updateMaterial(material, payload) {
 
 function openBasketDrawer() {
   closeAnalysisDrawer();
+  closeCodeDrawer();
   closeSynthesisDrawer();
   basketPanelEl.hidden = false;
   basketOverlayEl.hidden = false;
@@ -895,6 +1079,22 @@ function closeAnalysisDrawer() {
   syncBodyLock();
 }
 
+function openCodeDrawer() {
+  closeBasketDrawer();
+  closeAnalysisDrawer();
+  closeSynthesisDrawer();
+  renderCodeScan();
+  codeDrawerEl.hidden = false;
+  codeOverlayEl.hidden = false;
+  syncBodyLock();
+}
+
+function closeCodeDrawer() {
+  codeDrawerEl.hidden = true;
+  codeOverlayEl.hidden = true;
+  syncBodyLock();
+}
+
 function closeSynthesisDrawer() {
   synthesisDrawerEl.hidden = true;
   synthesisOverlayEl.hidden = true;
@@ -902,7 +1102,10 @@ function closeSynthesisDrawer() {
 }
 
 function syncBodyLock() {
-  const drawerOpen = !basketPanelEl.hidden || !analysisDrawerEl.hidden || !synthesisDrawerEl.hidden;
+  const drawerOpen = !basketPanelEl.hidden
+    || !analysisDrawerEl.hidden
+    || !codeDrawerEl.hidden
+    || !synthesisDrawerEl.hidden;
   document.body.classList.toggle("drawer-open", drawerOpen);
 }
 
@@ -921,7 +1124,7 @@ function openProfileDialog(mode = "edit") {
 
 function fillProjectForm(project) {
   if (!project) return;
-  for (const field of ["id", "name", "domain", "task_type", "idea", "keywords", "backbone", "neck", "head", "dataset", "max_results"]) {
+  for (const field of ["id", "name", "domain", "task_type", "idea", "keywords", "backbone", "neck", "head", "dataset", "code_path", "code_repo_url", "max_results"]) {
     if (formEl.elements[field]) formEl.elements[field].value = project[field] || "";
   }
 }
@@ -938,6 +1141,8 @@ function projectPayloadFromForm() {
     neck: form.get("neck"),
     head: form.get("head"),
     dataset: form.get("dataset"),
+    code_path: form.get("code_path"),
+    code_repo_url: form.get("code_repo_url"),
     max_results: Number(form.get("max_results") || 20),
   };
 }
@@ -961,11 +1166,13 @@ formEl.addEventListener("submit", async (event) => {
       ? await api(`/api/projects?id=${id}`, { method: "PUT", body: JSON.stringify(payload) })
       : await api("/api/projects", { method: "POST", body: JSON.stringify(payload) });
     state.currentProjectId = saved.id;
+    state.codeScan = null;
     state.synthesis = null;
+    closeCodeDrawer();
     closeSynthesisDrawer();
     profileDialogEl.close();
     await loadProjects();
-    await Promise.all([loadProfileCheck(), loadMaterials()]);
+    await Promise.all([loadProfileCheck(), loadCodeScan(), loadMaterials()]);
     setStatus("项目画像已保存");
   } catch (error) {
     setStatus(`保存失败：${error.message}`);
@@ -977,15 +1184,17 @@ projectsEl.addEventListener("click", async (event) => {
   if (!item || state.busy) return;
   state.currentProjectId = Number(item.dataset.project);
   state.route = null;
+  state.codeScan = null;
   state.synthesis = null;
   closeBasketDrawer();
   closeAnalysisDrawer();
+  closeCodeDrawer();
   closeSynthesisDrawer();
   renderProjects();
   renderProfileSummary();
   updateProjectLinks();
   try {
-    await Promise.all([loadProfileCheck(), loadMaterials()]);
+    await Promise.all([loadProfileCheck(), loadCodeScan(), loadMaterials()]);
     setStatus("项目已切换");
   } catch (error) {
     setStatus(`切换失败：${error.message}`);
@@ -1037,6 +1246,10 @@ basketItemsEl.addEventListener("click", async (event) => {
 });
 
 synthesisContentEl.addEventListener("click", async (event) => {
+  if (event.target.closest("[data-open-code-map]")) {
+    openCodeDrawer();
+    return;
+  }
   const tab = event.target.closest("[data-scheme-view]");
   if (tab) {
     state.activeSynthesisSchemeId = tab.dataset.schemeView;
@@ -1070,6 +1283,12 @@ synthesisContentEl.addEventListener("click", async (event) => {
   }
 });
 
+codeScanContentEl.addEventListener("click", (event) => {
+  const action = event.target.closest("[data-code-action]")?.dataset.codeAction;
+  if (action === "scan") runCodeScan();
+  if (action === "edit") openProfileDialog("edit");
+});
+
 runWorkflowEl.addEventListener("click", runCompleteWorkflow);
 document.querySelector("#more-actions").addEventListener("click", (event) => {
   const stageButton = event.target.closest("[data-stage]");
@@ -1077,6 +1296,7 @@ document.querySelector("#more-actions").addEventListener("click", (event) => {
 });
 document.querySelector("#new-project").addEventListener("click", () => openProfileDialog("new"));
 document.querySelector("#edit-project").addEventListener("click", () => openProfileDialog("edit"));
+document.querySelector("#open-code-map").addEventListener("click", openCodeDrawer);
 document.querySelector("#close-profile").addEventListener("click", () => profileDialogEl.close());
 document.querySelector("#cancel-profile").addEventListener("click", () => profileDialogEl.close());
 profileDialogEl.addEventListener("click", (event) => {
@@ -1130,6 +1350,10 @@ document.querySelector("#refresh-analysis").addEventListener("click", async () =
   }
 });
 
+document.querySelector("#close-code-map").addEventListener("click", closeCodeDrawer);
+codeOverlayEl.addEventListener("click", closeCodeDrawer);
+document.querySelector("#refresh-code-scan").addEventListener("click", runCodeScan);
+
 document.querySelector("#close-synthesis").addEventListener("click", closeSynthesisDrawer);
 synthesisOverlayEl.addEventListener("click", closeSynthesisDrawer);
 document.querySelector("#refresh-synthesis").addEventListener("click", () => runStage("synthesis"));
@@ -1137,6 +1361,7 @@ document.querySelector("#refresh-synthesis").addEventListener("click", () => run
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
   if (!synthesisDrawerEl.hidden) closeSynthesisDrawer();
+  else if (!codeDrawerEl.hidden) closeCodeDrawer();
   else if (!analysisDrawerEl.hidden) closeAnalysisDrawer();
   else if (!basketPanelEl.hidden) closeBasketDrawer();
 });
@@ -1148,7 +1373,7 @@ document.addEventListener("click", (event) => {
 async function boot() {
   try {
     await loadProjects();
-    await Promise.all([loadProfileCheck(), loadMaterials()]);
+    await Promise.all([loadProfileCheck(), loadCodeScan(), loadMaterials()]);
     setStatus("准备就绪");
   } catch (error) {
     setStatus(`加载失败：${error.message}`);

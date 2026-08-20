@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 
@@ -20,11 +21,12 @@ DIFFICULTY_COST = {"low": 1, "medium": 2, "high": 3, "低": 1, "中": 2, "高": 
 def build_research_synthesis(
     project: dict[str, Any],
     materials: list[dict[str, Any]],
+    code_scan: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     selected = [item for item in materials if _is_relevant(item)][:10]
     comparison = [_comparison_item(item) for item in selected]
     relationships = _compatibility_relationships(comparison)
-    schemes = _build_schemes(project, comparison, relationships)
+    schemes = _build_schemes(project, comparison, relationships, code_scan or {})
     analyzed_count = sum(1 for item in comparison if item["analysis_ready"])
     evidence_count = sum(1 for item in comparison if item["evidence_ready"])
     code_count = sum(1 for item in comparison if item["code_ready"])
@@ -60,6 +62,7 @@ def build_research_synthesis(
             "counts": relationship_counts,
             "relationships": relationships,
         },
+        "code_context": _code_context(project, code_scan or {}),
         "schemes": schemes,
         "recommendation": {
             "primary_scheme_id": primary["id"] if primary else "",
@@ -74,7 +77,7 @@ def build_research_synthesis(
                 else "先补充可分析的候选论文。"
             ),
         },
-        "limitations": _limitations(comparison),
+        "limitations": _limitations(comparison, code_scan or {}),
     }
 
 
@@ -154,6 +157,7 @@ def _build_schemes(
     project: dict[str, Any],
     items: list[dict[str, Any]],
     relationships: list[dict[str, Any]],
+    code_scan: dict[str, Any],
 ) -> list[dict[str, Any]]:
     if not items:
         return []
@@ -213,7 +217,7 @@ def _build_schemes(
         ),
     ]
     return [
-        _scheme(project, scheme_id, name, strategy, selected, rationale, relationships)
+        _scheme(project, scheme_id, name, strategy, selected, rationale, relationships, code_scan)
         for scheme_id, name, strategy, selected, rationale in specs
     ]
 
@@ -226,6 +230,7 @@ def _scheme(
     selected: list[dict[str, Any]],
     rationale: str,
     relationships: list[dict[str, Any]],
+    code_scan: dict[str, Any],
 ) -> dict[str, Any]:
     selected_ids = {item["paper_id"] for item in selected}
     related = [
@@ -293,6 +298,7 @@ def _scheme(
         "estimated_cost": _estimated_cost(selected),
         "confidence": confidence,
         "implementation_steps": implementation_steps,
+        "implementation_map": _implementation_map(selected, code_scan),
         "experiments": experiments,
         "metrics": _metrics(project),
         "stop_conditions": _stop_conditions(project),
@@ -369,8 +375,11 @@ def _stop_conditions(project: dict[str, Any]) -> list[str]:
     ]
 
 
-def _limitations(items: list[dict[str, Any]]) -> list[str]:
-    limitations = ["兼容性来自论文接口描述与规则推断，尚未扫描你的真实代码和张量形状。"]
+def _limitations(items: list[dict[str, Any]], code_scan: dict[str, Any]) -> list[str]:
+    if code_scan.get("status") == "ready":
+        limitations = ["文件位置来自只读静态扫描；尚未执行代码，也没有验证真实张量形状和运行时依赖。"]
+    else:
+        limitations = ["兼容性来自论文接口描述与规则推断，尚未扫描你的真实代码和张量形状。"]
     missing_analysis = sum(1 for item in items if not item["analysis_ready"])
     missing_evidence = sum(1 for item in items if not item["evidence_ready"])
     if missing_analysis:
@@ -378,6 +387,97 @@ def _limitations(items: list[dict[str, Any]]) -> list[str]:
     if missing_evidence:
         limitations.append(f"{missing_evidence} 张素材缺少全文证据，关键方法仍需人工复核。")
     return limitations
+
+
+def _code_context(project: dict[str, Any], code_scan: dict[str, Any]) -> dict[str, Any]:
+    summary = code_scan.get("summary") or {}
+    return {
+        "status": code_scan.get("status") or "not_scanned",
+        "repository_name": code_scan.get("repository_name") or "",
+        "repository_url": project.get("code_repo_url") or "",
+        "root": code_scan.get("root") or project.get("code_path") or "",
+        "scanned_at": code_scan.get("scanned_at") or project.get("code_scan_updated_at") or "",
+        "frameworks": code_scan.get("frameworks") or [],
+        "areas": code_scan.get("areas") or [],
+        "files_scanned": int(summary.get("files_scanned") or 0),
+        "component_count": int(summary.get("component_count") or 0),
+        "entrypoints": code_scan.get("entrypoints") or [],
+        "warnings": code_scan.get("warnings") or [],
+    }
+
+
+def _implementation_map(
+    items: list[dict[str, Any]],
+    code_scan: dict[str, Any],
+) -> list[dict[str, Any]]:
+    components = code_scan.get("components") or []
+    mapped = []
+    for item in items:
+        candidates = [component for component in components if component.get("area") == item["area"]]
+        target = max(candidates, key=lambda value: _target_score(item, value), default=None)
+        if target:
+            location = f"{target.get('path')}:{target.get('line', 1)}"
+            action = (
+                f"优先检查 {location} 的 {target.get('name') or '现有实现'}，"
+                f"通过配置开关接入 {item['module']}。"
+            )
+            status = "mapped"
+        else:
+            action = f"未找到明确的 {item['area']} 实现；先定位注册表或构建函数，再接入 {item['module']}。"
+            status = "unmapped"
+        mapped.append(
+            {
+                "paper_id": item["paper_id"],
+                "area": item["area"],
+                "module": item["module"],
+                "status": status,
+                "target": (
+                    {
+                        key: target.get(key)
+                        for key in ("path", "line", "name", "kind", "confidence")
+                    }
+                    if target
+                    else None
+                ),
+                "action": action,
+                "validation": _code_validation(item["area"]),
+            }
+        )
+    return mapped
+
+
+def _target_score(item: dict[str, Any], component: dict[str, Any]) -> float:
+    source_tokens = _word_tokens(
+        " ".join(
+            str(value or "")
+            for value in (item.get("module"), item.get("subtag"), item.get("action"))
+        )
+    )
+    target_tokens = _word_tokens(
+        " ".join(
+            str(value or "")
+            for value in (component.get("name"), component.get("path"), " ".join(component.get("signals") or []))
+        )
+    )
+    return float(component.get("confidence") or 0) + len(source_tokens.intersection(target_tokens)) * 12
+
+
+def _word_tokens(value: str) -> set[str]:
+    expanded = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", value)
+    return {token.lower() for token in re.split(r"[^A-Za-z0-9]+", expanded) if len(token) > 2}
+
+
+def _code_validation(area: str) -> list[str]:
+    checks = {
+        "Backbone": ["检查各 stage 输出尺寸与通道数", "运行最小前向传播和显存测试"],
+        "Neck": ["检查多尺度特征数量、stride 与通道数", "运行特征融合单元测试"],
+        "Head": ["检查类别数、输出字段与后处理接口", "运行单批次预测烟雾测试"],
+        "Loss": ["检查 loss 字典键名与梯度是否有限", "在固定 batch 上比较基线损失"],
+        "Data": ["检查样本字段、标注格式与增强顺序", "可视化一个 batch 的输入和标签"],
+        "Training": ["检查优化器参数组和调度器步进时机", "运行短周期训练烟雾测试"],
+        "Experiment": ["新增独立配置并固定随机种子", "保留基线配置用于可归因对照"],
+    }
+    return checks.get(area, ["运行导入检查", "执行最小烟雾测试"])
 
 
 def _is_relevant(material: dict[str, Any]) -> bool:

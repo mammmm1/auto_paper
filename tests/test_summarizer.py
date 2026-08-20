@@ -4,6 +4,7 @@ import tempfile
 import unittest
 
 from auto_paper.arxiv_client import parse_arxiv_feed
+from auto_paper.code_scanner import scan_codebase
 from auto_paper.database import Database
 from auto_paper.deep_analyzer import (
     analysis_input_hash,
@@ -117,6 +118,47 @@ class VenueRankerTests(unittest.TestCase):
 
 
 class DatabaseTests(unittest.TestCase):
+    def test_persists_code_profile_and_invalidates_scan_when_path_changes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db = Database(Path(directory) / "test.sqlite3")
+            topic = db.add_topic(
+                "Code scan test",
+                "all:test",
+                idea="keep this idea",
+                code_path="D:/work/model-a",
+                code_repo_url="https://example.com/model-a",
+            )
+            with db.connect() as conn:
+                paper_id = conn.execute(
+                    """
+                    INSERT INTO papers(
+                        topic_id, external_id, title, authors, abstract, summary,
+                        recommendation_score, recommendation_reason, published_at,
+                        updated_at, pdf_url, entry_url
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        topic["id"], "paper-1", "Paper", "Author", "Abstract", "Summary",
+                        80, "Relevant", "2026-01-01", "2026-01-01", "pdf", "entry",
+                    ),
+                ).lastrowid
+            db.save_deep_analysis(paper_id, "{}", "rules", "rules-v1", "hash")
+            db.save_code_scan(topic["id"], json.dumps({"status": "ready"}))
+
+            unchanged = db.update_topic(topic["id"], {"code_path": "D:/work/model-a"})
+            self.assertTrue(unchanged["code_scan_json"])
+
+            updated = db.update_topic(
+                topic["id"],
+                {"idea": "keep this idea", "code_path": "D:/work/model-b"},
+            )
+
+            self.assertEqual(updated["code_path"], "D:/work/model-b")
+            self.assertEqual(updated["code_repo_url"], "https://example.com/model-a")
+            self.assertEqual(updated["code_scan_json"], "")
+            self.assertEqual(updated["code_scan_updated_at"], "")
+            self.assertEqual(db.get_paper(paper_id)["deep_analysis_json"], "{}")
+
     def test_upsert_persists_venue_metadata(self):
         with tempfile.TemporaryDirectory() as directory:
             db = Database(Path(directory) / "test.sqlite3")
@@ -210,6 +252,41 @@ class SynthesisTests(unittest.TestCase):
         self.assertEqual(result["coverage"]["evidence_count"], 0)
         self.assertTrue(any("缺少结构化" in item for item in result["limitations"]))
 
+    def test_maps_scheme_modules_to_scanned_code_files(self):
+        code_scan = {
+            "status": "ready",
+            "root": "D:/work/model",
+            "repository_name": "model",
+            "frameworks": ["PyTorch"],
+            "areas": ["Neck"],
+            "summary": {"files_scanned": 12, "component_count": 1},
+            "components": [
+                {
+                    "area": "Neck",
+                    "kind": "class",
+                    "name": "FeaturePyramid",
+                    "path": "models/necks/fpn.py",
+                    "line": 18,
+                    "confidence": 91,
+                    "signals": ["neck", "fpn"],
+                }
+            ],
+            "entrypoints": [],
+            "warnings": [],
+        }
+
+        result = build_research_synthesis(
+            {"id": 1, "name": "项目", "code_repo_url": "https://example.com/model"},
+            [self._material(1, "Neck", "Feature Fusion", "低", 88, 82)],
+            code_scan,
+        )
+
+        implementation = result["schemes"][0]["implementation_map"][0]
+        self.assertEqual(implementation["status"], "mapped")
+        self.assertEqual(implementation["target"]["path"], "models/necks/fpn.py")
+        self.assertEqual(result["code_context"]["files_scanned"], 12)
+        self.assertTrue(any("只读静态扫描" in item for item in result["limitations"]))
+
     @staticmethod
     def _material(
         material_id: int,
@@ -252,6 +329,40 @@ class SynthesisTests(unittest.TestCase):
             "full_text_status": "verified",
             "full_text_json": json.dumps(evidence),
         }
+
+
+class CodeScannerTests(unittest.TestCase):
+    def test_builds_component_map_and_ignores_artifact_directories(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            files = {
+                "models/backbones/swin.py": "import torch\nclass SwinTransformer(torch.nn.Module):\n    pass\n",
+                "models/necks/fpn.py": "class FeaturePyramid:\n    pass\n",
+                "models/losses.py": "class DiceLoss:\n    pass\n",
+                "datasets/remote.py": "class RemoteSensingDataset:\n    pass\n",
+                "train.py": "def train():\n    pass\n",
+                "configs/model.json": json.dumps({"model": {"backbone": {}, "neck": {}, "head": {}}}),
+                "checkpoints/secret.py": "class HiddenBackbone:\n    pass\n",
+            }
+            for relative_path, content in files.items():
+                path = root / relative_path
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(content, encoding="utf-8")
+
+            result = scan_codebase(str(root))
+
+        self.assertEqual(result["status"], "ready")
+        self.assertIn("PyTorch", result["frameworks"])
+        self.assertIn("Backbone", result["areas"])
+        self.assertIn("Neck", result["areas"])
+        self.assertIn("Loss", result["areas"])
+        self.assertIn("Data", result["areas"])
+        self.assertTrue(any(item["path"] == "train.py" for item in result["entrypoints"]))
+        self.assertFalse(any("checkpoints" in item["path"] for item in result["components"]))
+
+    def test_reports_unconfigured_and_missing_directories(self):
+        self.assertEqual(scan_codebase("")["status"], "not_configured")
+        self.assertEqual(scan_codebase("Z:/path/that/does/not/exist")["status"], "not_found")
 
 
 class MaterializerTests(unittest.TestCase):

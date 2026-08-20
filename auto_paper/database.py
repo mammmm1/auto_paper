@@ -74,6 +74,10 @@ class Database:
             self._ensure_column(conn, "topics", "neck", "TEXT NOT NULL DEFAULT ''")
             self._ensure_column(conn, "topics", "head", "TEXT NOT NULL DEFAULT ''")
             self._ensure_column(conn, "topics", "dataset", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(conn, "topics", "code_path", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(conn, "topics", "code_repo_url", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(conn, "topics", "code_scan_json", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(conn, "topics", "code_scan_updated_at", "TEXT NOT NULL DEFAULT ''")
             self._ensure_column(conn, "papers", "material_type", "TEXT NOT NULL DEFAULT 'idea'")
             self._ensure_column(conn, "papers", "integration_area", "TEXT NOT NULL DEFAULT 'Experiment'")
             self._ensure_column(conn, "papers", "integration_subtag", "TEXT NOT NULL DEFAULT ''")
@@ -216,9 +220,9 @@ class Database:
                 """
                 INSERT INTO topics(
                     name, query, max_results, domain, task_type, idea,
-                    keywords, backbone, neck, head, dataset
+                    keywords, backbone, neck, head, dataset, code_path, code_repo_url
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     name.strip(),
@@ -232,6 +236,8 @@ class Database:
                     fields.get("neck", "").strip(),
                     fields.get("head", "").strip(),
                     fields.get("dataset", "").strip(),
+                    fields.get("code_path", "").strip(),
+                    fields.get("code_repo_url", "").strip(),
                 ),
             )
             row = conn.execute("SELECT * FROM topics WHERE id = ?", (cursor.lastrowid,)).fetchone()
@@ -250,6 +256,8 @@ class Database:
             "neck",
             "head",
             "dataset",
+            "code_path",
+            "code_repo_url",
         }
         updates = {key: value for key, value in fields.items() if key in allowed}
         if "max_results" in updates:
@@ -261,7 +269,7 @@ class Database:
         assignments = ", ".join(f"{key} = ?" for key in updates)
         params = list(updates.values()) + [topic_id]
         with self.connect() as conn:
-            conn.execute(f"UPDATE topics SET {assignments} WHERE id = ?", params)
+            existing = conn.execute("SELECT * FROM topics WHERE id = ?", (topic_id,)).fetchone()
             analysis_fields = {
                 "name",
                 "domain",
@@ -273,7 +281,18 @@ class Database:
                 "head",
                 "dataset",
             }
-            if analysis_fields.intersection(updates):
+            analysis_profile_changed = existing is not None and any(
+                str(existing[field] or "") != str(updates[field] or "")
+                for field in analysis_fields
+                if field in updates
+            )
+            code_profile_changed = existing is not None and any(
+                str(existing[field] or "") != str(updates[field] or "")
+                for field in ("code_path", "code_repo_url")
+                if field in updates
+            )
+            conn.execute(f"UPDATE topics SET {assignments} WHERE id = ?", params)
+            if analysis_profile_changed:
                 conn.execute(
                     """
                     UPDATE papers
@@ -284,8 +303,30 @@ class Database:
                     """,
                     (topic_id,),
                 )
+            if code_profile_changed:
+                conn.execute(
+                    """
+                    UPDATE topics
+                    SET code_scan_json = '', code_scan_updated_at = ''
+                    WHERE id = ?
+                    """,
+                    (topic_id,),
+                )
             row = conn.execute("SELECT * FROM topics WHERE id = ?", (topic_id,)).fetchone()
             return dict(row)
+
+    def save_code_scan(self, topic_id: int, scan_json: str) -> dict[str, Any] | None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                UPDATE topics
+                SET code_scan_json = ?, code_scan_updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (scan_json, topic_id),
+            )
+            row = conn.execute("SELECT * FROM topics WHERE id = ?", (topic_id,)).fetchone()
+            return dict(row) if row is not None else None
 
     def delete_topic(self, topic_id: int) -> None:
         with self.connect() as conn:

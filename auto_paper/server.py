@@ -12,6 +12,7 @@ from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
 
 from auto_paper.arxiv_client import search_arxiv
+from auto_paper.code_scanner import scan_codebase
 from auto_paper.config import Settings, load_settings
 from auto_paper.database import Database
 from auto_paper.deep_analyzer import analysis_engine, analysis_input_hash, analyze_material
@@ -151,7 +152,55 @@ class AutoPaperApp:
             for item in self.ranked_papers(topic_id=topic_id, limit=500)
         }
         papers = [papers_by_id[paper_id] for paper_id in paper_ids if paper_id in papers_by_id]
-        return build_research_synthesis(project, papers)
+        return build_research_synthesis(project, papers, self.cached_code_scan(topic_id))
+
+    def cached_code_scan(self, topic_id: int) -> dict | None:
+        project = self.project(topic_id)
+        if project is None:
+            return None
+        raw = str(project.get("code_scan_json") or "")
+        if raw:
+            try:
+                result = json.loads(raw)
+            except json.JSONDecodeError:
+                result = None
+            if isinstance(result, dict):
+                result["repository_url"] = project.get("code_repo_url") or ""
+                return result
+        return {
+            "status": "not_scanned" if project.get("code_path") else "not_configured",
+            "root": project.get("code_path") or "",
+            "repository_name": Path(project.get("code_path") or "").name,
+            "repository_url": project.get("code_repo_url") or "",
+            "scanned_at": "",
+            "frameworks": [],
+            "areas": [],
+            "summary": {
+                "files_scanned": 0,
+                "python_files": 0,
+                "config_files": 0,
+                "component_count": 0,
+                "entrypoint_count": 0,
+                "truncated": False,
+            },
+            "components": [],
+            "entrypoints": [],
+            "files_by_area": {},
+            "warnings": [
+                "请先在项目画像中填写本地代码目录。"
+                if not project.get("code_path")
+                else "代码目录已配置，尚未执行扫描。"
+            ],
+        }
+
+    def scan_project_code(self, topic_id: int) -> dict | None:
+        project = self.project(topic_id)
+        if project is None:
+            return None
+        result = scan_codebase(str(project.get("code_path") or ""))
+        result["repository_url"] = project.get("code_repo_url") or ""
+        self.db.save_code_scan(topic_id, json.dumps(result, ensure_ascii=False))
+        return result
 
     def cached_evidence(self, paper_id: int) -> dict | None:
         paper = self.db.get_paper(paper_id)
@@ -372,6 +421,18 @@ def create_handler(app: AutoPaperApp) -> type[BaseHTTPRequestHandler]:
                     return
                 self._json(result)
                 return
+            if route.path == "/api/code-scan":
+                query = parse_qs(route.query)
+                topic_id = _optional_int(query.get("topic_id", [""])[0])
+                if not topic_id:
+                    self._json({"error": "missing topic_id"}, HTTPStatus.BAD_REQUEST)
+                    return
+                result = app.cached_code_scan(topic_id)
+                if result is None:
+                    self._json({"error": "project not found"}, HTTPStatus.NOT_FOUND)
+                    return
+                self._json(result)
+                return
             if route.path == "/api/deep-analysis":
                 query = parse_qs(route.query)
                 paper_id = _optional_int(query.get("paper_id", [""])[0])
@@ -438,6 +499,8 @@ def create_handler(app: AutoPaperApp) -> type[BaseHTTPRequestHandler]:
                         neck=payload.get("neck", ""),
                         head=payload.get("head", ""),
                         dataset=payload.get("dataset", ""),
+                        code_path=payload.get("code_path", ""),
+                        code_repo_url=payload.get("code_repo_url", ""),
                     )
                     self._json(project, HTTPStatus.CREATED)
                 except (KeyError, ValueError) as exc:
@@ -497,6 +560,18 @@ def create_handler(app: AutoPaperApp) -> type[BaseHTTPRequestHandler]:
                     self._json({"error": "missing topic_id"}, HTTPStatus.BAD_REQUEST)
                     return
                 result = app.synthesize_top(topic_id)
+                if result is None:
+                    self._json({"error": "project not found"}, HTTPStatus.NOT_FOUND)
+                    return
+                self._json(result)
+                return
+            if route.path == "/api/code-scan":
+                query = parse_qs(route.query)
+                topic_id = _optional_int(query.get("topic_id", [""])[0])
+                if not topic_id:
+                    self._json({"error": "missing topic_id"}, HTTPStatus.BAD_REQUEST)
+                    return
+                result = app.scan_project_code(topic_id)
                 if result is None:
                     self._json({"error": "project not found"}, HTTPStatus.NOT_FOUND)
                     return
